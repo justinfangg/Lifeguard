@@ -18,9 +18,10 @@ Do the host build first; it de-risks everything before you fight the toolchain.
 # macOS (Homebrew)
 brew install cmake opencv
 
-# TensorFlow Lite: build once for the host, or use a prebuilt.
-# See scripts/build_deps_qnx.sh for the CMake invocation (drop the toolchain
-# file to build for the host instead).
+# TensorFlow Lite / LiteRT C++ source for the host. This project integrates it
+# through its official CMake target, which also supplies its dependencies.
+git clone --depth 1 --branch v2.16.1 \
+  https://github.com/tensorflow/tensorflow.git third_party/tensorflow
 ```
 
 ### Configure, build, run
@@ -28,14 +29,23 @@ brew install cmake opencv
 ```bash
 cmake -B build-host \
       -DCMAKE_BUILD_TYPE=Release \
-      -DOpenCV_DIR="$(brew --prefix opencv)/lib/cmake/opencv4" \
-      -DTFLITE_ROOT=/path/to/tflite-host
+      -DTFLITE_SOURCE_DIR="$PWD/third_party/tensorflow"
 cmake --build build-host -j
 
 # Point the config at a recorded clip and run:
 #   camera_backend = file
 #   video_file     = /path/to/pool_clip.mp4
 ./build-host/ai_lifeguard --config config/lifeguard.conf
+```
+
+To build and run only the webcam smoke test, TensorFlow Lite is not needed:
+
+```bash
+cmake -S . -B build-host-camera \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_AI_LIFEGUARD=OFF \
+      -DBUILD_CAMERA_TEST=ON
+cmake --build build-host-camera --target camera_test -j
 ```
 
 Use this loop to validate the detector output layout ([src/detector.cpp](../src/detector.cpp))
