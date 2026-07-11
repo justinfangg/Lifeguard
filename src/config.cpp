@@ -40,6 +40,7 @@ bool Config::load(const std::string& path, Config& out) {
 
         if (key == "camera_backend") out.camera_backend = val;
         else if (key == "camera_device") out.camera_device = val;
+        else if (key == "camera_unit") out.camera_unit = std::stoi(val);
         else if (key == "video_file") out.video_file = val;
         else if (key == "frame_width") out.frame_width = std::stoi(val);
         else if (key == "frame_height") out.frame_height = std::stoi(val);

@@ -1,133 +1,133 @@
 #!/usr/bin/env bash
 #
-# Cross-build the AI Lifeguard dependencies (TensorFlow Lite and, optionally,
-# OpenCV) for QNX SDP 8.0 / aarch64 (aarch64le).
+# Build the AI Lifeguard dependencies (OpenCV + TensorFlow Lite) for
+# QNX SDP 8.0 / aarch64 using the OFFICIAL qnx-ports build-files flow —
+# the same one the QNX "ai-camera-app" sample uses.
 #
-# Host: macOS (also works on Linux). Requires: cmake >= 3.16, git, ninja or make.
+#   https://github.com/qnx-ports/build-files
+#
+# IMPORTANT: QNX ports build from a **Linux host only**. On macOS or Windows,
+# run this inside the QNX build Docker container:
+#
+#     git clone https://github.com/qnx-ports/build-files.git
+#     cd build-files/docker
+#     ./docker-build-qnx-image.sh
+#     ./docker-create-container.sh      # drops you into an Ubuntu container
+#     # ...then run this script inside the container.
+#
+# Prerequisites inside the Linux host/container:
+#   * QNX SDP 8.0 installed and licensed, environment sourced
+#   * python3.11 (+venv), gfortran, cmake, git
+#   * QNX package com.qnx.qnx800.target.screen.img_codecs (for OpenCV)
 #
 # Usage:
-#   source ~/qnx800/qnxsdp-env.sh            # sets QNX_HOST / QNX_TARGET
+#   source ~/qnx800/qnxsdp-env.sh
 #   scripts/build_deps_qnx.sh [tflite] [opencv] [all]
 #
-# Examples:
-#   scripts/build_deps_qnx.sh tflite         # just TFLite
-#   scripts/build_deps_qnx.sh all            # TFLite + OpenCV
-#
-# Outputs are installed under:  third_party/qnx-aarch64/{include,lib}
-# Point the app build at them with:
-#   -DTFLITE_ROOT=<repo>/third_party/qnx-aarch64
-#   -DOpenCV_DIR=<repo>/third_party/qnx-aarch64/lib/cmake/opencv4
+# Artifacts are shared libraries (.so) — copy them to the target and link the
+# app against them (see docs/BUILD.md).
 #
 set -euo pipefail
 
-# --- Locations --------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TOOLCHAIN="$REPO_ROOT/cmake/qnx-toolchain.cmake"
-WORK_DIR="$REPO_ROOT/third_party/_build"
-PREFIX="$REPO_ROOT/third_party/qnx-aarch64"
 
-# Pin versions for reproducibility; bump as needed.
-TF_VERSION="v2.16.1"
-OPENCV_VERSION="4.9.0"
+# Where the port source repos and build-files get cloned / installed.
+WORKSPACE="${QNX_WORKSPACE:-$REPO_ROOT/third_party/qnx_workspace}"
+STAGING="${QNX_STAGING:-$REPO_ROOT/third_party/qnx-staging}"
+JLEVEL="${JLEVEL:-4}"
 
-# --- Pre-flight checks ------------------------------------------------------
+# --- Pre-flight -------------------------------------------------------------
 if [[ -z "${QNX_HOST:-}" || -z "${QNX_TARGET:-}" ]]; then
-    echo "error: QNX_HOST / QNX_TARGET not set." >&2
-    echo "       Run 'source ~/qnx800/qnxsdp-env.sh' first." >&2
+    echo "error: QNX_HOST / QNX_TARGET not set — run 'source ~/qnx800/qnxsdp-env.sh'." >&2
     exit 1
 fi
-if [[ ! -f "$TOOLCHAIN" ]]; then
-    echo "error: toolchain file not found: $TOOLCHAIN" >&2
-    exit 1
+if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "warning: qnx-ports builds only from Linux. On macOS/Windows use the" >&2
+    echo "         QNX build Docker container (see header) and run this inside it." >&2
 fi
-
 command -v cmake >/dev/null || { echo "error: cmake not found" >&2; exit 1; }
 command -v git   >/dev/null || { echo "error: git not found"   >&2; exit 1; }
 
-# Prefer ninja if available.
-GENERATOR="Unix Makefiles"
-if command -v ninja >/dev/null; then GENERATOR="Ninja"; fi
+mkdir -p "$WORKSPACE" "$STAGING"
+cd "$WORKSPACE"
 
-JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+clone_once() { [[ -d "$2" ]] || git clone "$1" "$2"; }
 
-mkdir -p "$WORK_DIR" "$PREFIX"
+ensure_common() {
+    clone_once https://github.com/qnx-ports/build-files.git build-files
+    clone_once https://github.com/qnx-ports/numpy.git numpy
+    ( cd numpy && git submodule update --init --recursive )
+}
+
+build_numpy() {
+    echo "==> numpy (dependency)"
+    PREFIX="/usr" QNX_PROJECT_ROOT="$WORKSPACE/numpy" \
+        make -C build-files/ports/numpy install -j"$JLEVEL"
+}
 
 # --- TensorFlow Lite --------------------------------------------------------
 build_tflite() {
-    echo "==> Building TensorFlow Lite ($TF_VERSION) for aarch64le"
-    local src="$WORK_DIR/tensorflow"
-    if [[ ! -d "$src" ]]; then
-        git clone --depth 1 --branch "$TF_VERSION" \
-            https://github.com/tensorflow/tensorflow.git "$src"
+    ensure_common
+    clone_once https://github.com/qnx-ports/tensorflow.git tensorflow
+
+    echo "==> host flatc (build tool used by TFLite)"
+    if [[ ! -x "$WORKSPACE/flatc-native-build/flatbuffers-flatc/bin/flatc" ]]; then
+        mkdir -p flatc-native-build
+        ( cd flatc-native-build && \
+          cmake ../tensorflow/tensorflow/lite/tools/cmake/native_tools/flatbuffers && \
+          cmake --build . )
     fi
 
-    local build="$WORK_DIR/tflite-qnx"
-    cmake -S "$src/tensorflow/lite" -B "$build" -G "$GENERATOR" \
-        -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DTFLITE_ENABLE_XNNPACK=ON \
-        -DTFLITE_ENABLE_GPU=OFF \
-        -DTFLITE_ENABLE_RUY=ON \
-        -DTFLITE_ENABLE_INSTALL=ON \
-        -DCMAKE_INSTALL_PREFIX="$PREFIX"
+    build_numpy
 
-    cmake --build "$build" -j "$JOBS"
-    cmake --install "$build" || {
-        # Some TFLite versions don't ship an install target; stage by hand.
-        echo "    (no install target — staging headers/libs manually)"
-        mkdir -p "$PREFIX/include" "$PREFIX/lib"
-        rsync -a --include='*/' --include='*.h' --exclude='*' \
-            "$src/tensorflow/lite/" "$PREFIX/include/tensorflow/lite/"
-        find "$build" -name 'libtensorflow-lite*.a' -exec cp {} "$PREFIX/lib/" \;
-    }
-    echo "==> TFLite installed under $PREFIX"
+    echo "==> TensorFlow Lite for aarch64le"
+    QNX_PROJECT_ROOT="$WORKSPACE/tensorflow" \
+    QNX_PATCH_DIR="$WORKSPACE/build-files/ports/tensorflow/patches" \
+    TFLITE_HOST_TOOLS_DIR="$WORKSPACE/flatc-native-build/flatbuffers-flatc/bin/" \
+        make -C build-files/ports/tensorflow install JLEVEL="$JLEVEL"
+
+    echo "    TFLite .so files under:"
+    echo "      $WORKSPACE/build-files/ports/tensorflow/nto-aarch64-le/build/"
 }
 
 # --- OpenCV -----------------------------------------------------------------
 build_opencv() {
-    echo "==> Building OpenCV ($OPENCV_VERSION) for aarch64le"
-    local src="$WORK_DIR/opencv"
-    if [[ ! -d "$src" ]]; then
-        git clone --depth 1 --branch "$OPENCV_VERSION" \
-            https://github.com/opencv/opencv.git "$src"
-    fi
+    ensure_common
+    clone_once https://github.com/qnx-ports/opencv.git opencv
+    clone_once https://github.com/qnx-ports/muslflt.git muslflt
 
-    local build="$WORK_DIR/opencv-qnx"
-    # Minimal module set for this app: core, imgproc, imgcodecs, videoio.
-    cmake -S "$src" -B "$build" -G "$GENERATOR" \
-        -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-        -DBUILD_LIST=core,imgproc,imgcodecs,videoio \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF \
-        -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF \
-        -DWITH_FFMPEG=OFF -DWITH_GTK=OFF -DWITH_V4L=OFF \
-        -DWITH_OPENEXR=OFF -DWITH_JASPER=OFF \
-        -DBUILD_JPEG=ON -DBUILD_PNG=ON -DBUILD_ZLIB=ON
+    echo "==> muslflt (consistent math; recommended before OpenCV)"
+    make -C build-files/ports/muslflt/ \
+        INSTALL_ROOT_nto="$STAGING" USE_INSTALL_ROOT=true install \
+        QNX_PROJECT_ROOT="$WORKSPACE/muslflt" -j"$JLEVEL"
 
-    cmake --build "$build" -j "$JOBS"
-    cmake --install "$build"
-    echo "==> OpenCV installed under $PREFIX"
+    build_numpy
+
+    echo "==> OpenCV for aarch64le"
+    BUILD_TESTING="OFF" QNX_PROJECT_ROOT="$WORKSPACE/opencv" \
+        make -C build-files/ports/opencv \
+        INSTALL_ROOT_nto="$STAGING" USE_INSTALL_ROOT=true install -j"$JLEVEL"
+
+    echo "    OpenCV installed under: $STAGING/aarch64le/usr/local"
 }
 
 # --- Dispatch ---------------------------------------------------------------
-targets=("${@:-tflite}")
-did_something=0
+targets=("${@:-all}")
 for t in "${targets[@]}"; do
     case "$t" in
-        tflite) build_tflite; did_something=1 ;;
-        opencv) build_opencv; did_something=1 ;;
-        all)    build_tflite; build_opencv; did_something=1 ;;
+        tflite) build_tflite ;;
+        opencv) build_opencv ;;
+        all)    build_tflite; build_opencv ;;
         *) echo "unknown target: $t (expected: tflite | opencv | all)" >&2 ;;
     esac
 done
 
-if [[ "$did_something" -eq 1 ]]; then
-    echo
-    echo "Done. Configure the app with:"
-    echo "  cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \\"
-    echo "        -DTFLITE_ROOT=$PREFIX \\"
-    echo "        -DOpenCV_DIR=$PREFIX/lib/cmake/opencv4"
-fi
+cat <<EOF
+
+Done. Configure the app pointing at the built dependencies, e.g.:
+  -DTFLITE_ROOT=$WORKSPACE/build-files/ports/tensorflow/nto-aarch64-le/build
+  -DOpenCV_DIR=$STAGING/aarch64le/usr/local/lib/cmake/opencv4
+
+Remember to copy the .so files to the target (see docs/BUILD.md).
+EOF

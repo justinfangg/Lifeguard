@@ -9,6 +9,7 @@ struct Config {
     // --- Camera --------------------------------------------------------
     std::string camera_backend = "uvc";  // "uvc" | "csi" | "file"
     std::string camera_device = "/dev/video0";
+    int camera_unit = 1;                 // QSF camera unit (CAMERA_UNIT_*)
     std::string video_file;              // used when camera_backend == "file"
     int frame_width = 1280;
     int frame_height = 720;
