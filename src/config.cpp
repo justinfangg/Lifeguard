@@ -50,6 +50,8 @@ bool Config::load(const std::string& path, Config& out) {
         else if (key == "num_threads") out.num_threads = std::stoi(val);
         else if (key == "detector_score_threshold")
             out.detector_score_threshold = std::stof(val);
+        else if (key == "person_class_id")
+            out.person_class_id = std::stoi(val);
         else if (key == "distress_persist_seconds")
             out.distress_persist_seconds = std::stof(val);
         else if (key == "temporal_window_seconds")

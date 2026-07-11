@@ -7,8 +7,8 @@ Expected files (paths referenced by `config/lifeguard.conf`):
 
 | File | Purpose | Suggested source |
 |------|---------|------------------|
-| `swimmer_detector_int8.tflite` | Person/swimmer detection | Start from a COCO-pretrained SSD-MobileNet or a nano-YOLO exported to TFLite, then **int8-quantize** it. Fine-tune on pool footage for best results. |
-| `movenet_lightning_int8.tflite` | Single-person pose (17 keypoints) | MoveNet Lightning (int8) from TF Hub / Kaggle Models. |
+| `swimmer_detector_int8.tflite` | Person/swimmer detection | Auto-downloaded by `scripts/fetch_models.sh` (COCO SSD-MobileNet v1, uint8). Fine-tune on pool footage for best results. |
+| `movenet_lightning_int8.tflite` | Single-person pose (17 keypoints) | **Optional.** MoveNet Lightning (int8) from Kaggle Models (login required). Without it the app runs detection + motion-based distress features only. |
 
 ## Requirements for on-target performance
 
@@ -21,9 +21,9 @@ Expected files (paths referenced by `config/lifeguard.conf`):
 
 ## Fetching
 
-Use `scripts/fetch_models.sh` as a starting point. Because model hosting and
-licences vary, that script documents where to download from rather than
-hard-coding URLs.
+Run `scripts/fetch_models.sh` from the repo root. It downloads the detector
+automatically and prints instructions for the optional MoveNet pose model
+(which now requires a Kaggle login).
 
 ## A note on the detector
 

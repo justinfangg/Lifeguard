@@ -1,37 +1,58 @@
 #!/bin/sh
 # Fetch / stage the TFLite models AI Lifeguard needs.
 #
-# Model hosting and licences change over time, so this script intentionally
-# does not hard-code download URLs. Fill in the URLs (or copy from a local
-# mirror) for your environment, then run it from the repo root.
-#
 #   sh scripts/fetch_models.sh
 #
-# The resulting files must match the paths in config/lifeguard.conf:
-#   models/swimmer_detector_int8.tflite
-#   models/movenet_lightning_int8.tflite
+# Produces (paths referenced by config/lifeguard.conf):
+#   models/swimmer_detector_int8.tflite   (person detector — downloaded here)
+#   models/movenet_lightning_int8.tflite  (pose — OPTIONAL, manual, see below)
+#
+# The detector is a generic COCO person detector (SSD-MobileNet v1, uint8),
+# whose output layout matches src/detector.cpp (boxes/classes/scores/count) and
+# whose "person" class id is 0 (see person_class_id in the config). The app runs
+# with just this model; pose only adds two of the four distress features.
 
 set -e
 MODEL_DIR="$(cd "$(dirname "$0")/../models" && pwd)"
-
 echo "Model directory: $MODEL_DIR"
 
-# --- MoveNet Lightning (int8) -----------------------------------------
-# Available from TF Hub / Kaggle Models. Download the int8 .tflite and save as:
-MOVENET_DST="$MODEL_DIR/movenet_lightning_int8.tflite"
-# Example:
-#   curl -L -o "$MOVENET_DST" "<MOVENET_INT8_TFLITE_URL>"
-if [ ! -f "$MOVENET_DST" ]; then
-    echo "TODO: download MoveNet Lightning int8 -> $MOVENET_DST"
-fi
+fetch() {  # fetch <url> <dest>
+    if command -v curl >/dev/null 2>&1; then curl -L -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then wget -O "$2" "$1"
+    else echo "error: need curl or wget" >&2; return 1
+    fi
+}
 
-# --- Swimmer / person detector (int8) ---------------------------------
-# Start from an SSD-MobileNet or nano-YOLO exported to TFLite and int8
-# quantized. Optionally fine-tune on pool footage. Save as:
+# --- Person / swimmer detector (int8) ---------------------------------
 DET_DST="$MODEL_DIR/swimmer_detector_int8.tflite"
-#   curl -L -o "$DET_DST" "<DETECTOR_INT8_TFLITE_URL>"
-if [ ! -f "$DET_DST" ]; then
-    echo "TODO: download / build swimmer detector int8 -> $DET_DST"
+DET_URL="https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip"
+if [ -f "$DET_DST" ]; then
+    echo "detector already present: $DET_DST"
+else
+    echo "Downloading COCO SSD-MobileNet detector..."
+    TMP="$(mktemp -d)"
+    fetch "$DET_URL" "$TMP/detector.zip"
+    unzip -o "$TMP/detector.zip" -d "$TMP" >/dev/null
+    # The archive ships detect.tflite (+ labelmap.txt).
+    cp "$TMP/detect.tflite" "$DET_DST"
+    rm -rf "$TMP"
+    echo "detector -> $DET_DST"
 fi
 
-echo "Done. Verify both .tflite files exist in $MODEL_DIR before running."
+# --- MoveNet Lightning pose (int8) — OPTIONAL -------------------------
+# MoveNet now lives on Kaggle Models behind a login, so it cannot be fetched
+# with a plain curl. It is OPTIONAL: without it the app still runs (detection +
+# motion features). To add pose:
+#   1. Sign in and download "singlepose-lightning-tflite-int8" from
+#      https://www.kaggle.com/models/google/movenet
+#   2. Save the .tflite as:
+POSE_DST="$MODEL_DIR/movenet_lightning_int8.tflite"
+if [ -f "$POSE_DST" ]; then
+    echo "pose model present: $POSE_DST"
+else
+    echo "pose model NOT present (optional): $POSE_DST"
+    echo "  -> download MoveNet singlepose-lightning int8 from Kaggle and save there."
+fi
+
+echo "Done."
+

@@ -26,6 +26,7 @@ public:
         int num_threads = 4;
         float score_threshold = 0.5f;
         float nms_iou_threshold = 0.45f;
+        int person_class_id = 0;  // class index treated as person/swimmer
     };
 
     explicit Detector(Options opts);

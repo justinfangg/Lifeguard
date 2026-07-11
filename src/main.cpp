@@ -56,17 +56,23 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    Detector detector({cfg.detector_model, cfg.num_threads,
-                       cfg.detector_score_threshold});
+    Detector::Options dopts;
+    dopts.model_path = cfg.detector_model;
+    dopts.num_threads = cfg.num_threads;
+    dopts.score_threshold = cfg.detector_score_threshold;
+    dopts.person_class_id = cfg.person_class_id;
+    Detector detector(dopts);
     if (!detector.init()) {
         std::fprintf(stderr, "[main] detector init failed\n");
         return 1;
     }
 
     PoseEstimator pose({cfg.pose_model, std::max(1, cfg.num_threads / 2)});
-    if (!pose.init()) {
-        std::fprintf(stderr, "[main] pose init failed\n");
-        return 1;
+    const bool pose_ok = pose.init();
+    if (!pose_ok) {
+        std::fprintf(stderr,
+                     "[main] pose model unavailable; running detection + "
+                     "motion-based distress features only\n");
     }
 
     Tracker tracker;
@@ -110,7 +116,7 @@ int main(int argc, char** argv) {
                 static_cast<int>(t.box.x), static_cast<int>(t.box.y),
                 static_cast<int>(t.box.width),
                 static_cast<int>(t.box.height));
-            const Pose p = pose.estimate(frame, roi);
+            const Pose p = pose_ok ? pose.estimate(frame, roi) : Pose{};
             const DistressAssessment a =
                 analyzer.evaluate(t, p, frame.timestamp_ns);
             alerter.handle(a, frame.timestamp_ns);
