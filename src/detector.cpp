@@ -130,7 +130,7 @@ std::vector<Detection> Detector::detect(const Frame& frame) {
         if (scores[i] < opts_.score_threshold) continue;
         const int cls = classes ? static_cast<int>(classes[i]) : 0;
         // Keep only the person class (COCO id 0 for many exports).
-        if (cls != 0) continue;
+        if (cls != opts_.person_class_id) continue;
 
         // Normalized box -> model pixels -> undo letterbox -> frame pixels.
         const float ymin = boxes[i * 4 + 0] * model_h;

@@ -20,6 +20,9 @@ struct Config {
     std::string pose_model = "models/movenet_lightning_int8.tflite";
     int num_threads = 4;                 // TFLite / XNNPACK worker threads
     float detector_score_threshold = 0.5f;
+    // Class index the detector treats as "person/swimmer". For the COCO
+    // SSD-MobileNet model this is 0; adjust if your model's labelmap differs.
+    int person_class_id = 0;
 
     // --- Distress logic ------------------------------------------------
     // How long the distress condition must persist before alerting (seconds).
