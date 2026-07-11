@@ -66,13 +66,10 @@ Lifeguard/
 └── docs/ARCHITECTURE.md      Design notes
 ```
 
-## Building
+> See [`docs/BUILD.md`](docs/BUILD.md) for the full host + cross-compile
+> workflow, including the `scripts/build_deps_qnx.sh` dependency builder.
 
-See [`docs/BUILD.md`](docs/BUILD.md) for the full host + QNX cross-build guide,
-and use [`scripts/build_deps_qnx.sh`](scripts/build_deps_qnx.sh) to cross-build
-OpenCV + TensorFlow Lite for `aarch64le`. Quick reference below.
-
-### Cross-compiling for QNX aarch64
+## Building (on the host, cross-compiling for QNX aarch64)
 
 Prerequisites:
 

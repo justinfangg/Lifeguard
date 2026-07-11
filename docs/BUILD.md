@@ -1,119 +1,108 @@
 # Building AI Lifeguard
 
-There are two build flavours:
+Two build paths:
 
-1. **Host build** — native OpenCV + TFLite on your Linux dev machine, for
-   developing and tuning the pipeline against recorded footage (fastest).
-2. **QNX cross build** — for `aarch64le`, to run on the Raspberry Pi 5 / QNX 8.0.
+1. **Host build** — native, for developing and tuning the pipeline against
+   recorded footage (fastest iteration, no QNX needed).
+2. **QNX cross build** — for `aarch64le`, to run on the Raspberry Pi 5.
 
-Do the host build first: it lets you validate the whole detect → track → pose →
-distress logic with zero QNX risk.
+Do the host build first; it de-risks everything before you fight the toolchain.
 
 ---
 
-## 1. Host build (Linux dev machine)
+## 1. Host build (macOS / Linux dev machine)
 
-Install native dependencies (Ubuntu/Debian example):
+### Dependencies
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential cmake git libopencv-dev
+# macOS (Homebrew)
+brew install cmake opencv
+
+# TensorFlow Lite: build once for the host, or use a prebuilt.
+# See scripts/build_deps_qnx.sh for the CMake invocation (drop the toolchain
+# file to build for the host instead).
 ```
 
-For TensorFlow Lite, either install a system package or build it once from
-source (same steps as the QNX build below, minus the toolchain file), then
-point CMake at it via `-DTFLITE_ROOT=`.
-
-Configure, build, and run against a video clip:
+### Configure, build, run
 
 ```bash
-cmake -B build-host -DCMAKE_BUILD_TYPE=Release -DTFLITE_ROOT=/path/to/tflite
+cmake -B build-host \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DOpenCV_DIR="$(brew --prefix opencv)/lib/cmake/opencv4" \
+      -DTFLITE_ROOT=/path/to/tflite-host
 cmake --build build-host -j
 
-# config/lifeguard.conf:
+# Point the config at a recorded clip and run:
 #   camera_backend = file
 #   video_file     = /path/to/pool_clip.mp4
 ./build-host/ai_lifeguard --config config/lifeguard.conf
 ```
 
-This is where you verify the detector's output layout matches
-`src/detector.cpp` and calibrate the thresholds in `DistressAnalyzer`.
+Use this loop to validate the detector output layout ([src/detector.cpp](../src/detector.cpp))
+and to calibrate the distress thresholds ([src/distress_analyzer.cpp](../src/distress_analyzer.cpp)).
 
 ---
 
-## 2. QNX cross build (aarch64le)
+## 2. QNX cross build (target: Raspberry Pi 5, aarch64le)
 
-Prerequisites on the Linux host:
-
-- **QNX SDP 8.0** installed.
-- `cmake` (>= 3.16) and `git`.
-
-### 2a. Cross-build the dependencies
-
-Source the SDP environment, then run the helper. It cross-builds TensorFlow
-Lite (with the XNNPACK CPU delegate) and OpenCV into `./deps-qnx`:
+### 2.1 Source the SDP
 
 ```bash
-source ~/qnx800/qnxsdp-env.sh          # sets QNX_HOST / QNX_TARGET
-scripts/build_deps_qnx.sh
+source ~/qnx800/qnxsdp-env.sh     # exports QNX_HOST and QNX_TARGET
+echo "$QNX_HOST"; echo "$QNX_TARGET"
 ```
 
-Useful overrides:
+### 2.2 Cross-build the dependencies
+
+Use the helper script (installs into `third_party/qnx-aarch64/`):
 
 ```bash
-# Only rebuild TFLite, into a custom prefix, with pinned versions:
-BUILD_OPENCV=0 DEPS_PREFIX=$PWD/deps-qnx TF_VERSION=v2.16.1 \
-  scripts/build_deps_qnx.sh
+scripts/build_deps_qnx.sh all      # TensorFlow Lite + OpenCV
+# or individually:
+scripts/build_deps_qnx.sh tflite
+scripts/build_deps_qnx.sh opencv
 ```
 
-> The dependency cross-build is the trickiest step. If TFLite or OpenCV fail to
-> compile against the SDP, build them one at a time (`BUILD_OPENCV=0` /
-> `BUILD_TFLITE=0`) and read the first CMake/compiler error — usually a missing
-> QNX-side library or an option that needs disabling.
+> The dependency cross-build is the fiddliest part. If TFLite or OpenCV fail to
+> configure, check that `qcc`/`q++` are on `PATH` (from `qnxsdp-env.sh`) and that
+> `cmake --version` is >= 3.16. Build logs land under `third_party/_build/`.
 
-### 2b. Build the app
+### 2.3 Build the app
 
 ```bash
 cmake -B build \
       -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \
       -DCMAKE_BUILD_TYPE=Release \
-      -DOpenCV_DIR=$PWD/deps-qnx/lib/cmake/opencv4 \
-      -DTFLITE_ROOT=$PWD/deps-qnx
+      -DTFLITE_ROOT="$PWD/third_party/qnx-aarch64" \
+      -DOpenCV_DIR="$PWD/third_party/qnx-aarch64/lib/cmake/opencv4"
 cmake --build build -j
 ```
 
-To link the QNX camera framework for live UVC capture, add
-`-DLIFEGUARD_QNX_CAMERA=ON` (do this once `UvcCameraSource` is implemented).
+To enable the QNX camera-framework capture backend (once you implement it),
+add `-DLIFEGUARD_QNX_CAMERA=ON`.
 
-### 2c. Deploy to the Pi 5
+### 2.4 Deploy to the Pi 5
 
 ```bash
 PI=root@<pi5-ip>
-ssh $PI 'mkdir -p /data/lifeguard/models'
-scp build/ai_lifeguard config/lifeguard.conf $PI:/data/lifeguard/
-scp deps-qnx/lib/libopencv_*.so.* $PI:/data/lifeguard/   # if shared OpenCV
-scp models/*.tflite $PI:/data/lifeguard/models/
+ssh "$PI" 'mkdir -p /data/lifeguard/models'
+scp build/ai_lifeguard config/lifeguard.conf "$PI":/data/lifeguard/
+scp models/*.tflite "$PI":/data/lifeguard/models/
+
+ssh "$PI" 'cd /data/lifeguard && ./ai_lifeguard --config lifeguard.conf'
 ```
 
-On the target:
-
-```bash
-cd /data/lifeguard
-export LD_LIBRARY_PATH=/data/lifeguard:$LD_LIBRARY_PATH
-./ai_lifeguard --config lifeguard.conf
-```
-
-Start with `camera_backend = file` and a clip copied to the Pi to confirm
-inference works on QNX, then switch to `uvc` once the camera backend is done.
+Run first with `camera_backend = file` (a clip staged on the target) to confirm
+inference works on QNX, **then** move to a live USB/UVC camera.
 
 ---
 
-## Troubleshooting
+## Build order summary
 
-| Symptom | Likely cause / fix |
-|---------|--------------------|
-| `TensorFlow Lite not found` at configure | Set `-DTFLITE_ROOT=` to the prefix that contains `include/tensorflow/lite/...` and `lib/libtensorflow-lite.a`. |
-| Link errors for `XNNPACK` / `pthreadpool` / `cpuinfo` | Those static libs weren't staged; check `deps-qnx/lib/` and copy any missing `*.a` from the TFLite build tree. |
-| `[camera:uvc] built without LIFEGUARD_QNX_CAMERA` | Rebuild with `-DLIFEGUARD_QNX_CAMERA=ON` on the target. |
-| Detector returns nothing / wrong boxes | Output layout mismatch — verify your model against the parsing in `src/detector.cpp`. |
-| Slow FPS on target | Use int8 models, shrink detector input (e.g. 320×320), raise `num_threads` in the config. |
+```
+host build (file input)  ─►  QNX deps  ─►  QNX app build  ─►  deploy + file test  ─►  UVC camera  ─►  CSI camera
+      (Milestone 1)              (────────  Milestone 2  ────────)                   (Milestone 3)
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the distress-detection
+rationale.

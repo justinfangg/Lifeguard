@@ -1,11 +1,15 @@
 # Build output
 build/
+build-host/
 out/
 *.o
 *.obj
 *.so
 *.a
 ai_lifeguard
+
+# Cross-compiled dependencies (built by scripts/build_deps_qnx.sh)
+third_party/
 
 # TFLite models are large – fetch them with scripts/fetch_models.sh
 models/*.tflite

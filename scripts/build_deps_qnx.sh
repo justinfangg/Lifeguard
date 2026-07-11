@@ -1,140 +1,133 @@
 #!/usr/bin/env bash
 #
 # Cross-build the AI Lifeguard dependencies (TensorFlow Lite and, optionally,
-# OpenCV) for QNX 8.0 aarch64 (aarch64le), using the repo's CMake toolchain
-# file. Run this on a Linux host with QNX SDP 8.0 installed.
+# OpenCV) for QNX SDP 8.0 / aarch64 (aarch64le).
+#
+# Host: macOS (also works on Linux). Requires: cmake >= 3.16, git, ninja or make.
 #
 # Usage:
-#   source ~/qnx800/qnxsdp-env.sh          # sets QNX_HOST / QNX_TARGET
-#   scripts/build_deps_qnx.sh              # builds everything into ./deps-qnx
+#   source ~/qnx800/qnxsdp-env.sh            # sets QNX_HOST / QNX_TARGET
+#   scripts/build_deps_qnx.sh [tflite] [opencv] [all]
 #
-# Environment overrides:
-#   DEPS_PREFIX     install prefix           (default: <repo>/deps-qnx)
-#   BUILD_TFLITE    1/0 build TFLite         (default: 1)
-#   BUILD_OPENCV    1/0 build OpenCV         (default: 1)
-#   TF_VERSION      TensorFlow git tag       (default: v2.16.1)
-#   OPENCV_VERSION  OpenCV git tag           (default: 4.9.0)
-#   JOBS            parallel build jobs      (default: nproc)
+# Examples:
+#   scripts/build_deps_qnx.sh tflite         # just TFLite
+#   scripts/build_deps_qnx.sh all            # TFLite + OpenCV
 #
-# After it finishes, configure the app with:
-#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \
-#         -DOpenCV_DIR=$DEPS_PREFIX/lib/cmake/opencv4 \
-#         -DTFLITE_ROOT=$DEPS_PREFIX
-
+# Outputs are installed under:  third_party/qnx-aarch64/{include,lib}
+# Point the app build at them with:
+#   -DTFLITE_ROOT=<repo>/third_party/qnx-aarch64
+#   -DOpenCV_DIR=<repo>/third_party/qnx-aarch64/lib/cmake/opencv4
+#
 set -euo pipefail
 
-# --- Locate the repo + toolchain -----------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --- Locations --------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TOOLCHAIN="$REPO_ROOT/cmake/qnx-toolchain.cmake"
+WORK_DIR="$REPO_ROOT/third_party/_build"
+PREFIX="$REPO_ROOT/third_party/qnx-aarch64"
 
-DEPS_PREFIX="${DEPS_PREFIX:-$REPO_ROOT/deps-qnx}"
-BUILD_TFLITE="${BUILD_TFLITE:-1}"
-BUILD_OPENCV="${BUILD_OPENCV:-1}"
-TF_VERSION="${TF_VERSION:-v2.16.1}"
-OPENCV_VERSION="${OPENCV_VERSION:-4.9.0}"
-JOBS="${JOBS:-$(nproc)}"
+# Pin versions for reproducibility; bump as needed.
+TF_VERSION="v2.16.1"
+OPENCV_VERSION="4.9.0"
 
-WORK="$REPO_ROOT/.deps-src"
-
-# --- Sanity checks -------------------------------------------------------
+# --- Pre-flight checks ------------------------------------------------------
 if [[ -z "${QNX_HOST:-}" || -z "${QNX_TARGET:-}" ]]; then
     echo "error: QNX_HOST / QNX_TARGET not set." >&2
-    echo "       run 'source <sdp>/qnxsdp-env.sh' first." >&2
+    echo "       Run 'source ~/qnx800/qnxsdp-env.sh' first." >&2
     exit 1
 fi
 if [[ ! -f "$TOOLCHAIN" ]]; then
-    echo "error: toolchain file not found at $TOOLCHAIN" >&2
+    echo "error: toolchain file not found: $TOOLCHAIN" >&2
     exit 1
 fi
-for tool in cmake git; do
-    command -v "$tool" >/dev/null || { echo "error: '$tool' not found" >&2; exit 1; }
-done
 
-echo "=========================================================="
-echo " AI Lifeguard dependency cross-build (QNX aarch64le)"
-echo "   QNX_HOST    = $QNX_HOST"
-echo "   QNX_TARGET  = $QNX_TARGET"
-echo "   DEPS_PREFIX = $DEPS_PREFIX"
-echo "   TFLite      = $([[ $BUILD_TFLITE == 1 ]] && echo "$TF_VERSION" || echo skip)"
-echo "   OpenCV      = $([[ $BUILD_OPENCV == 1 ]] && echo "$OPENCV_VERSION" || echo skip)"
-echo "   JOBS        = $JOBS"
-echo "=========================================================="
+command -v cmake >/dev/null || { echo "error: cmake not found" >&2; exit 1; }
+command -v git   >/dev/null || { echo "error: git not found"   >&2; exit 1; }
 
-mkdir -p "$WORK" "$DEPS_PREFIX"
+# Prefer ninja if available.
+GENERATOR="Unix Makefiles"
+if command -v ninja >/dev/null; then GENERATOR="Ninja"; fi
 
-# -------------------------------------------------------------------------
-# TensorFlow Lite (+ XNNPACK) — built from the TensorFlow tree's CMake project.
-# -------------------------------------------------------------------------
+JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+
+mkdir -p "$WORK_DIR" "$PREFIX"
+
+# --- TensorFlow Lite --------------------------------------------------------
 build_tflite() {
-    echo "--- TensorFlow Lite $TF_VERSION ---"
-    local src="$WORK/tensorflow"
+    echo "==> Building TensorFlow Lite ($TF_VERSION) for aarch64le"
+    local src="$WORK_DIR/tensorflow"
     if [[ ! -d "$src" ]]; then
         git clone --depth 1 --branch "$TF_VERSION" \
             https://github.com/tensorflow/tensorflow.git "$src"
     fi
 
-    local build="$WORK/build-tflite"
-    cmake -S "$src/tensorflow/lite" -B "$build" \
+    local build="$WORK_DIR/tflite-qnx"
+    cmake -S "$src/tensorflow/lite" -B "$build" -G "$GENERATOR" \
         -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX" \
         -DTFLITE_ENABLE_XNNPACK=ON \
-        -DTFLITE_ENABLE_RUY=ON \
         -DTFLITE_ENABLE_GPU=OFF \
-        -DBUILD_SHARED_LIBS=OFF
+        -DTFLITE_ENABLE_RUY=ON \
+        -DTFLITE_ENABLE_INSTALL=ON \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX"
+
     cmake --build "$build" -j "$JOBS"
-
-    # TFLite's CMake target does not always define an install rule; stage the
-    # headers + the static lib into the prefix so the app's find_* can locate
-    # them (matches TFLITE_ROOT expectations in the top-level CMakeLists.txt).
-    mkdir -p "$DEPS_PREFIX/include" "$DEPS_PREFIX/lib"
-    ( cd "$src" && find tensorflow/lite -name '*.h' -print0 \
-        | while IFS= read -r -d '' f; do
-              install -D "$f" "$DEPS_PREFIX/include/$f"
-          done )
-    find "$build" -name 'libtensorflow-lite.a' -exec cp {} "$DEPS_PREFIX/lib/" \;
-    # XNNPACK + deps static libs (needed at final link time).
-    find "$build" \( -name 'libXNNPACK.a' -o -name 'libpthreadpool.a' \
-        -o -name 'libcpuinfo.a' -o -name 'libfarmhash.a' \
-        -o -name 'libfft2d*.a' -o -name 'libruy*.a' -o -name 'libflatbuffers.a' \) \
-        -exec cp {} "$DEPS_PREFIX/lib/" \; 2>/dev/null || true
-
-    echo "TFLite installed under $DEPS_PREFIX"
+    cmake --install "$build" || {
+        # Some TFLite versions don't ship an install target; stage by hand.
+        echo "    (no install target — staging headers/libs manually)"
+        mkdir -p "$PREFIX/include" "$PREFIX/lib"
+        rsync -a --include='*/' --include='*.h' --exclude='*' \
+            "$src/tensorflow/lite/" "$PREFIX/include/tensorflow/lite/"
+        find "$build" -name 'libtensorflow-lite*.a' -exec cp {} "$PREFIX/lib/" \;
+    }
+    echo "==> TFLite installed under $PREFIX"
 }
 
-# -------------------------------------------------------------------------
-# OpenCV — minimal module set needed by the app.
-# -------------------------------------------------------------------------
+# --- OpenCV -----------------------------------------------------------------
 build_opencv() {
-    echo "--- OpenCV $OPENCV_VERSION ---"
-    local src="$WORK/opencv"
+    echo "==> Building OpenCV ($OPENCV_VERSION) for aarch64le"
+    local src="$WORK_DIR/opencv"
     if [[ ! -d "$src" ]]; then
         git clone --depth 1 --branch "$OPENCV_VERSION" \
             https://github.com/opencv/opencv.git "$src"
     fi
 
-    local build="$WORK/build-opencv"
-    cmake -S "$src" -B "$build" \
+    local build="$WORK_DIR/opencv-qnx"
+    # Minimal module set for this app: core, imgproc, imgcodecs, videoio.
+    cmake -S "$src" -B "$build" -G "$GENERATOR" \
         -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX" \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DBUILD_LIST=core,imgproc,imgcodecs,videoio \
-        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_SHARED_LIBS=OFF \
         -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF \
         -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF \
         -DWITH_FFMPEG=OFF -DWITH_GTK=OFF -DWITH_V4L=OFF \
-        -DWITH_1394=OFF -DWITH_OPENEXR=OFF
+        -DWITH_OPENEXR=OFF -DWITH_JASPER=OFF \
+        -DBUILD_JPEG=ON -DBUILD_PNG=ON -DBUILD_ZLIB=ON
+
     cmake --build "$build" -j "$JOBS"
     cmake --install "$build"
-    echo "OpenCV installed under $DEPS_PREFIX"
+    echo "==> OpenCV installed under $PREFIX"
 }
 
-[[ "$BUILD_TFLITE" == 1 ]] && build_tflite
-[[ "$BUILD_OPENCV" == 1 ]] && build_opencv
+# --- Dispatch ---------------------------------------------------------------
+targets=("${@:-tflite}")
+did_something=0
+for t in "${targets[@]}"; do
+    case "$t" in
+        tflite) build_tflite; did_something=1 ;;
+        opencv) build_opencv; did_something=1 ;;
+        all)    build_tflite; build_opencv; did_something=1 ;;
+        *) echo "unknown target: $t (expected: tflite | opencv | all)" >&2 ;;
+    esac
+done
 
-echo
-echo "Done. Configure the app with:"
-echo "  cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \\"
-echo "        -DOpenCV_DIR=$DEPS_PREFIX/lib/cmake/opencv4 \\"
-echo "        -DTFLITE_ROOT=$DEPS_PREFIX"
+if [[ "$did_something" -eq 1 ]]; then
+    echo
+    echo "Done. Configure the app with:"
+    echo "  cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \\"
+    echo "        -DTFLITE_ROOT=$PREFIX \\"
+    echo "        -DOpenCV_DIR=$PREFIX/lib/cmake/opencv4"
+fi
