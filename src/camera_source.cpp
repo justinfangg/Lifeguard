@@ -36,10 +36,30 @@ public:
     explicit FileCameraSource(const Config& cfg) : cfg_(cfg) {}
 
     bool open() override {
-        if (!cap_.open(cfg_.video_file)) {
-            std::fprintf(stderr, "[camera:file] cannot open %s\n",
-                         cfg_.video_file.c_str());
+        // Resolve the source: "file" uses video_file; any other backend
+        // (host webcam testing) uses camera_device, which may be a numeric
+        // OpenCV camera index (e.g. "0") or a file path / URL.
+        const std::string src = (cfg_.camera_backend == "file")
+                                    ? cfg_.video_file
+                                    : cfg_.camera_device;
+        if (src.empty()) {
+            std::fprintf(stderr, "[camera:file] no source set "
+                                 "(video_file / camera_device is empty)\n");
             return false;
+        }
+
+        const bool is_index =
+            src.find_first_not_of("0123456789") == std::string::npos;
+        const bool ok = is_index ? cap_.open(std::stoi(src)) : cap_.open(src);
+        if (!ok) {
+            std::fprintf(stderr, "[camera:file] cannot open %s\n", src.c_str());
+            return false;
+        }
+
+        if (is_index) {  // live device: request the configured capture format
+            cap_.set(cv::CAP_PROP_FRAME_WIDTH, cfg_.frame_width);
+            cap_.set(cv::CAP_PROP_FRAME_HEIGHT, cfg_.frame_height);
+            cap_.set(cv::CAP_PROP_FPS, cfg_.target_fps);
         }
         return true;
     }
@@ -288,9 +308,9 @@ std::unique_ptr<CameraSource> CameraSource::create(const Config& cfg) {
     return std::make_unique<QnxCameraSource>(cfg);
 #else
     std::fprintf(stderr,
-                 "[camera] backend '%s' needs a QNX build "
-                 "(-DLIFEGUARD_QNX_CAMERA=ON). Use camera_backend=file "
-                 "for host testing.\n",
+                 "[camera] backend '%s' has no QNX build "
+                 "(-DLIFEGUARD_QNX_CAMERA=ON); using OpenCV on the host. Set "
+                 "camera_device to a webcam index (e.g. 0) or a file path.\n",
                  cfg.camera_backend.c_str());
     return std::make_unique<FileCameraSource>(cfg);
 #endif

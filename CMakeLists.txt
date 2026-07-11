@@ -80,3 +80,28 @@ endif()
 target_compile_options(ai_lifeguard PRIVATE -Wall -Wextra -O2)
 
 install(TARGETS ai_lifeguard RUNTIME DESTINATION bin)
+
+# --- Camera smoke-test tool ------------------------------------------------
+# A minimal executable that only needs OpenCV (no TensorFlow Lite / models),
+# used to verify a physical webcam captures frames. Build both host and QNX.
+option(BUILD_CAMERA_TEST "Build the standalone camera smoke-test tool" ON)
+if(BUILD_CAMERA_TEST)
+  add_executable(camera_test
+    tools/camera_test.cpp
+    src/config.cpp
+    src/camera_source.cpp)
+
+  target_include_directories(camera_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS})
+
+  target_link_libraries(camera_test PRIVATE ${OpenCV_LIBS})
+
+  if(LIFEGUARD_QNX_CAMERA)
+    target_compile_definitions(camera_test PRIVATE LIFEGUARD_QNX_CAMERA=1)
+    target_link_libraries(camera_test PRIVATE camapi screen)
+  endif()
+
+  target_compile_options(camera_test PRIVATE -Wall -Wextra -O2)
+  install(TARGETS camera_test RUNTIME DESTINATION bin)
+endif()
