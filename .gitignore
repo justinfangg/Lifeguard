@@ -1,0 +1,34 @@
+# Build output
+build/
+out/
+*.o
+*.obj
+*.so
+*.a
+ai_lifeguard
+
+# TFLite models are large – fetch them with scripts/fetch_models.sh
+models/*.tflite
+models/*.bin
+
+# Captured / recorded footage and debug frames
+*.mp4
+*.avi
+*.jpg
+*.png
+!docs/**/*.png
+captures/
+debug_frames/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
