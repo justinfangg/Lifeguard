@@ -32,7 +32,8 @@ public:
         size_t max_history = 90;    // centroid samples to keep (~6s @ 15fps)
     };
 
-    explicit Tracker(Options opts = {}) : opts_(opts) {}
+    Tracker() = default;
+    explicit Tracker(const Options& opts) : opts_(opts) {}
 
     // Associate detections with existing tracks and return the live tracks.
     const std::vector<Track>& update(const std::vector<Detection>& detections,

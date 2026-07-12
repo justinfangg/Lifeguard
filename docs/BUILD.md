@@ -55,12 +55,11 @@ and to calibrate the distress thresholds ([src/distress_analyzer.cpp](../src/dis
 
 ## 2. QNX cross build (target: Raspberry Pi, aarch64le)
 
-> **Platform note.** The QNX 8.0 Quick Start Image and the reference
-> `ai-camera-app` target the **Raspberry Pi 4**. The **Pi 5** uses a different
-> SoC (BCM2712 + RP1) and is **not** covered by the stock Quick Start Image —
-> confirm you have a QNX image that boots on the Pi 5 with a working camera
-> before investing in the cross-build. If Pi 5 support is not yet available for
-> your setup, a Pi 4 is the low-risk platform for v1.
+> **Platform note.** Boot the Pi 5 image first, then run
+> `scripts/probe_qnx_camera.sh` on the target before configuring a live camera.
+> The QNX Quick Start Target Image supports Raspberry Pi Camera Module 3 when
+> the IMX708 driver and Sensor Framework configuration are present. On a Pi 5,
+> connect the camera to the connector labelled `CAM/DISP0`.
 
 ### 2.0 Required QNX SDP 8.0 packages
 
@@ -71,6 +70,40 @@ Install via the QNX Software Center (needed for the camera + codecs):
 - `com.qnx.qnx800.target.mm.aoi`
 - `com.qnx.qnx800.target.mm.mmf.core`
 - `com.qnx.qnx800.target.screen.img_codecs`
+
+### 2.0.1 Probe the target camera stack
+
+After the Pi 5 boots QNX, copy `scripts/probe_qnx_camera.sh` to it and run:
+
+```bash
+scp scripts/probe_qnx_camera.sh root@<pi-ip>:/tmp/
+ssh root@<pi-ip> 'sh /tmp/probe_qnx_camera.sh /tmp/lifeguard-qnx-camera-probe.txt'
+scp root@<pi-ip>:/tmp/lifeguard-qnx-camera-probe.txt .
+```
+
+The report identifies whether the image exposes a camera/Sensor Framework
+stack. Do not set `camera_backend = csi` until it shows the IMX708 camera
+driver and the Broadcom Pi 5 sensor platform. If either is absent, obtain the
+matching QNX target-image components before attempting application capture.
+
+### 2.0.2 Verify Camera Module 3 before deploying the app
+
+Power the Pi off, connect the Camera Module 3 ribbon cable to `CAM/DISP0`, and
+boot it. On the Pi's local QNX console, become root and use QNX's supplied
+Sensor Framework configuration:
+
+```bash
+su -
+slay sensor
+sensor -U 521:521,1001 -b external -r /data/share/sensor \
+  -c /usr/etc/config/sensor/camera_module3.conf
+camera_example3_viewfinder
+```
+
+The viewfinder must show live frames before deploying AI Lifeguard. Press the
+viewfinder's quit key to exit. To keep this configuration after reboot, edit
+`/usr/etc/startup/post_startup.sh`: disable the simulator `sensor` command and
+enable the Camera Module 3 `sensor` command using the same arguments above.
 
 ### 2.1 Source the SDP
 
