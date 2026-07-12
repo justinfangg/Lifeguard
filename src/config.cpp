@@ -67,8 +67,12 @@ bool Config::load(const std::string& path, Config& out) {
             out.distress_score_threshold = std::stof(val);
         else if (key == "potential_distress_score_threshold")
             out.potential_distress_score_threshold = std::stof(val);
-        else if (key == "potential_hold_seconds")
-            out.potential_hold_seconds = std::stof(val);
+        else if (key == "potential_enter_seconds")
+            out.potential_enter_seconds = std::stof(val);
+        else if (key == "potential_clear_seconds")
+            out.potential_clear_seconds = std::stof(val);
+        else if (key == "alert_clear_seconds")
+            out.alert_clear_seconds = std::stof(val);
         else if (key == "alert_log") out.alert_log = toBool(val);
         else if (key == "log_path") out.log_path = val;
         // Unknown keys are ignored so newer configs stay backward compatible.

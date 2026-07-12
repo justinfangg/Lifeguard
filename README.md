@@ -63,6 +63,6 @@ sh scripts/test_network_video.sh build-host
 See [docs/BUILD.md](docs/BUILD.md) for the exact Pi sender, SSH tunnel, and Mac
 commands. The normal Mac config is [config/lifeguard.conf](config/lifeguard.conf).
 
-The key thresholds can be tuned there. The MVP defaults intentionally show red
-early (`potential_distress_score_threshold = 0.18`) and hold it for 2.5 seconds,
-while the actual alert remains sustained and stricter.
+The key thresholds can be tuned there. The defaults require multiple danger
+signals before showing red (`potential_distress_score_threshold = 0.60`) and a
+score of 0.75 sustained for five seconds before declaring a drowning alert.

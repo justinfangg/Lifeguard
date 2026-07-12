@@ -13,6 +13,7 @@ struct DistressAssessment {
     int track_id = -1;
     float score = 0.0f;   // instantaneous distress score [0,1]
     float smoothed_score = 0.0f;
+    bool horizontally_stationary = false;
     bool potential = false;
     bool alerting = false; // condition has persisted long enough to alert
     std::string reason;    // human-readable explanation for logs/UI
@@ -27,8 +28,9 @@ struct DistressAssessment {
 //   * low horizontal velocity (no forward progress),
 //   * vertical bobbing.
 //
-// An alert is only raised once the score stays above threshold for
-// `persist_seconds`, per track (debouncing).
+// Horizontal stationarity is a required gate, not just a weighted feature. An
+// alert is only raised once a horizontally-stationary swimmer's score stays
+// above threshold for `persist_seconds`, per track (debouncing).
 class DistressAnalyzer {
 public:
     struct Options {
@@ -36,7 +38,9 @@ public:
         float persist_seconds = 4.0f;   // must hold this long to alert
         float window_seconds = 6.0f;    // motion feature window
         float potential_threshold = 0.2f;
-        float potential_hold_seconds = 2.0f;
+        float potential_enter_seconds = 1.5f;
+        float potential_clear_seconds = 4.0f;
+        float alert_clear_seconds = 6.0f;
     };
 
     DistressAnalyzer() = default;
@@ -53,13 +57,18 @@ public:
 private:
     struct State {
         uint64_t distress_since_ns = 0;  // 0 == not currently distressed
-        uint64_t potential_until_ns = 0;
+        uint64_t potential_since_ns = 0;
+        uint64_t potential_recovery_since_ns = 0;
+        uint64_t alert_recovery_since_ns = 0;
+        bool potential = false;
+        bool alerting = false;
         float last_score = 0.0f;
         float smoothed_score = 0.0f;
     };
 
     float computeInstantScore(const Track& track, const Pose& pose,
-                              std::string& reason) const;
+                              std::string& reason,
+                              bool& horizontally_stationary) const;
 
     Options opts_;
     std::unordered_map<int, State> state_;

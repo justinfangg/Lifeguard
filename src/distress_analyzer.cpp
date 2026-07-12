@@ -24,13 +24,15 @@ cv::Point2f midpoint(const cv::Point2f& a, const cv::Point2f& b) {
 
 float DistressAnalyzer::computeInstantScore(const Track& track,
                                             const Pose& pose,
-                                            std::string& reason) const {
+                                            std::string& reason,
+                                            bool& horizontally_stationary) const {
     // Water, glare, and partial bodies lower pose confidence substantially.
     // Keep this permissive for the MVP and combine several temporal signals
     // before escalating from potential danger to a sustained alert.
     constexpr float kMinKp = 0.15f;
     float score = 0.0f;
     reason.clear();
+    horizontally_stationary = false;
 
     const bool have_shoulders =
         pose.score(Keypoint::kLeftShoulder) >= kMinKp &&
@@ -73,17 +75,25 @@ float DistressAnalyzer::computeInstantScore(const Track& track,
     }
 
     // --- Feature 3: low horizontal progress ----------------------------
-    // Compare displacement over the motion window against body size.
+    // Compare the full horizontal span over the motion window against body
+    // size. Start-to-end displacement alone would misclassify an out-and-back
+    // swimmer as stationary.
     if (track.centroids.size() >= 2) {
         const auto& first = track.centroids.front();
         const auto& last = track.centroids.back();
         const float dt =
             (last.first - first.first) / kNsPerSec;  // seconds
         if (dt >= opts_.window_seconds * 0.5f) {
-            const float horiz =
-                std::abs(last.second.x - first.second.x);
+            float min_x = std::numeric_limits<float>::max();
+            float max_x = std::numeric_limits<float>::lowest();
+            for (const auto& c : track.centroids) {
+                min_x = std::min(min_x, c.second.x);
+                max_x = std::max(max_x, c.second.x);
+            }
+            const float horizontal_span = max_x - min_x;
             const float body = std::max(track.box.width, 1.0f);
-            if (horiz < 0.5f * body) {
+            if (horizontal_span < 0.5f * body) {
+                horizontally_stationary = true;
                 score += 0.20f;
                 reason += "no-progress ";
             }
@@ -130,36 +140,95 @@ DistressAssessment DistressAnalyzer::evaluate(const Track& track,
                                               uint64_t timestamp_ns) {
     DistressAssessment result;
     result.track_id = track.id;
-    result.score = computeInstantScore(track, pose, result.reason);
+    result.score = computeInstantScore(track, pose, result.reason,
+                                       result.horizontally_stationary);
 
     State& st = state_[track.id];
     st.last_score = result.score;
 
-    // Light temporal smoothing keeps the UI from flashing green between
-    // adjacent danger frames. A potential condition is latched briefly so a
-    // lifeguard has time to see it while the stricter alert timer continues.
+    // A drowning classification requires both the distress signs above and
+    // low horizontal progress over the motion window. Do not let posture,
+    // bobbing, a latched state, or a stale smoothed score classify a swimmer
+    // who is actively travelling across the pool.
+    if (!result.horizontally_stationary) {
+        st.distress_since_ns = 0;
+        st.potential_since_ns = 0;
+        st.potential_recovery_since_ns = 0;
+        st.alert_recovery_since_ns = 0;
+        st.potential = false;
+        st.alerting = false;
+        st.smoothed_score = 0.0f;
+        result.smoothed_score = result.score;
+        return result;
+    }
+
+    // Smooth the score, then apply a state machine with hysteresis. Entering a
+    // danger state requires sustained evidence. Leaving it requires a lower
+    // score sustained for longer, preventing red/green flicker near a cutoff.
     st.smoothed_score = st.smoothed_score == 0.0f
                             ? result.score
                             : 0.65f * st.smoothed_score + 0.35f * result.score;
     result.smoothed_score = st.smoothed_score;
-    if (result.score >= opts_.potential_threshold ||
-        st.smoothed_score >= opts_.potential_threshold) {
-        st.potential_until_ns = timestamp_ns + static_cast<uint64_t>(
-            std::max(0.0f, opts_.potential_hold_seconds) * kNsPerSec);
-    }
-    result.potential = timestamp_ns <= st.potential_until_ns;
+    const float decision_score = std::max(result.score, st.smoothed_score);
+    const float clear_threshold = opts_.potential_threshold * 0.65f;
 
-    if (std::max(result.score, st.smoothed_score) >= opts_.score_threshold) {
-        if (st.distress_since_ns == 0) {
-            st.distress_since_ns = timestamp_ns;
+    if (!st.potential) {
+        if (decision_score >= opts_.potential_threshold) {
+            if (st.potential_since_ns == 0) st.potential_since_ns = timestamp_ns;
+            const float held =
+                (timestamp_ns - st.potential_since_ns) / kNsPerSec;
+            if (held >= opts_.potential_enter_seconds) {
+                st.potential = true;
+                st.potential_recovery_since_ns = 0;
+            }
+        } else {
+            st.potential_since_ns = 0;
         }
-        const float held =
-            (timestamp_ns - st.distress_since_ns) / kNsPerSec;
-        result.alerting = held >= opts_.persist_seconds;
+    } else if (decision_score < clear_threshold) {
+        if (st.potential_recovery_since_ns == 0) {
+            st.potential_recovery_since_ns = timestamp_ns;
+        }
+        const float safe_held =
+            (timestamp_ns - st.potential_recovery_since_ns) / kNsPerSec;
+        if (safe_held >= opts_.potential_clear_seconds) {
+            st.potential = false;
+            st.potential_since_ns = 0;
+            st.potential_recovery_since_ns = 0;
+        }
     } else {
-        st.distress_since_ns = 0;  // reset the timer
-        result.alerting = false;
+        st.potential_recovery_since_ns = 0;
     }
+
+    if (!st.alerting && decision_score >= opts_.score_threshold) {
+        if (st.distress_since_ns == 0) st.distress_since_ns = timestamp_ns;
+        const float held = (timestamp_ns - st.distress_since_ns) / kNsPerSec;
+        if (held >= opts_.persist_seconds) {
+            st.alerting = true;
+            st.potential = true;
+        }
+    } else if (!st.alerting) {
+        st.distress_since_ns = 0;
+    }
+
+    if (st.alerting) {
+        if (decision_score < clear_threshold) {
+            if (st.alert_recovery_since_ns == 0) {
+                st.alert_recovery_since_ns = timestamp_ns;
+            }
+            const float safe_held =
+                (timestamp_ns - st.alert_recovery_since_ns) / kNsPerSec;
+            if (safe_held >= opts_.alert_clear_seconds) {
+                st.alerting = false;
+                st.distress_since_ns = 0;
+                st.alert_recovery_since_ns = 0;
+            }
+        } else {
+            st.alert_recovery_since_ns = 0;
+        }
+    }
+
+    result.alerting = st.alerting;
+    result.potential = st.potential || st.alerting;
 
     return result;
 }

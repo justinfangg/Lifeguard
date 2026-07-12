@@ -38,7 +38,9 @@ struct Config {
     float temporal_window_seconds = 6.0f;
     float distress_score_threshold = 0.6f;
     float potential_distress_score_threshold = 0.2f;
-    float potential_hold_seconds = 2.0f;
+    float potential_enter_seconds = 1.5f;
+    float potential_clear_seconds = 4.0f;
+    float alert_clear_seconds = 6.0f;
 
     // --- Alerting ------------------------------------------------------
     bool alert_log = true;

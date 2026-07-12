@@ -67,8 +67,12 @@ Drowning is a **behaviour over time**, not an object in a single frame. The
 |---------|--------|--------|
 | Vertical torso | shoulder→hip vector near vertical | 0.35 |
 | Head low | nose at/under shoulder line (mouth at water) | 0.25 |
-| No forward progress | small horizontal displacement over window | 0.20 |
+| No forward progress | small horizontal span over window | 0.20 |
 | Bobbing | vertical oscillation of the centroid | 0.20 |
+
+No forward progress is also a hard classification gate: pose and bobbing can
+increase the score, but a swimmer moving horizontally across the pool cannot
+enter or remain in a drowning-alert state.
 
 These weights and thresholds are **starting points**. They must be calibrated on
 real footage for your pool (camera angle, height, water reflections, glare and

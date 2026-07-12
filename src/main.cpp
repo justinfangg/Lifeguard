@@ -161,7 +161,9 @@ int main(int argc, char** argv) {
                                cfg.distress_persist_seconds,
                                cfg.temporal_window_seconds,
                                cfg.potential_distress_score_threshold,
-                               cfg.potential_hold_seconds});
+                               cfg.potential_enter_seconds,
+                               cfg.potential_clear_seconds,
+                               cfg.alert_clear_seconds});
     Alerter alerter(cfg);
     alerter.init();
 
@@ -244,8 +246,8 @@ int main(int argc, char** argv) {
             const cv::Rect box = roi & cv::Rect(0, 0, display.cols, display.rows);
             cv::rectangle(display, box, color, potential ? 5 : 3);
             const std::string label = potential
-                ? (a.alerting ? "DROWNING ALERT" : "POTENTIAL DANGER")
-                : "SWIMMER";
+                ? "DROWNING ALERT"
+                : "SWIMMER - NORMAL";
             std::ostringstream details;
             details << label << "  " << std::fixed << std::setprecision(2)
                     << a.smoothed_score;
@@ -273,8 +275,8 @@ int main(int argc, char** argv) {
         cv::rectangle(display, cv::Rect(0, 0, display.cols, 42), banner_color,
                       cv::FILLED);
         std::ostringstream banner;
-        banner << (any_alert ? "DROWNING ALERT" :
-                   any_potential ? "POTENTIAL DANGER" : "MONITORING")
+        banner << ((any_alert || any_potential) ? "DROWNING ALERT"
+                                                : "MONITORING")
                << "   swimmers=" << dets.size()
                << "   AI=" << std::fixed << std::setprecision(1) << fps
                << " fps";
