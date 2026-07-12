@@ -12,8 +12,8 @@ Expected files (paths referenced by `config/lifeguard.conf`):
 
 ## Requirements for on-target performance
 
-- **int8 quantization** is strongly recommended — the Pi 5 runs inference on
-  CPU (XNNPACK) under QNX with no GPU/NPU offload.
+- **int8 quantization** is strongly recommended — inference runs on the CPU via
+  the XNNPACK delegate.
 - Keep detector input small (e.g. 320×320) to hit real-time at your target FPS.
 - Verify the detector's output layout matches `src/detector.cpp`
   (`TFLite Object-Detection API`: boxes/classes/scores/count). If you use a

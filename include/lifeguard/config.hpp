@@ -6,11 +6,8 @@ namespace lifeguard {
 
 // Runtime configuration, loaded from a simple `key = value` .conf file.
 struct Config {
-    // --- Camera --------------------------------------------------------
-    std::string camera_backend = "uvc";  // "uvc" | "csi" | "file"
-    std::string camera_device = "/dev/video0";
-    int camera_unit = 1;                 // QSF camera unit (CAMERA_UNIT_*)
-    std::string video_file;              // used when camera_backend == "file"
+    // --- Video input ---------------------------------------------------
+    std::string video_file;              // recorded footage to analyze (MP4)
     int frame_width = 1280;
     int frame_height = 720;
     int target_fps = 15;
@@ -31,10 +28,8 @@ struct Config {
     float temporal_window_seconds = 6.0f;
 
     // --- Alerting ------------------------------------------------------
-    bool alert_gpio = false;
-    int alert_gpio_pin = 17;
     bool alert_log = true;
-    std::string log_path = "/data/lifeguard/lifeguard.log";
+    std::string log_path = "lifeguard.log";
 
     // Load configuration from `path`. Missing keys keep their defaults.
     // Returns false if the file cannot be opened.

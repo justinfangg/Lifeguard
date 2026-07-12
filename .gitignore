@@ -8,7 +8,7 @@ out/
 *.a
 ai_lifeguard
 
-# Cross-compiled dependencies (built by scripts/build_deps_qnx.sh)
+# Downloaded / third-party dependencies
 third_party/
 
 # TFLite models are large – fetch them with scripts/fetch_models.sh

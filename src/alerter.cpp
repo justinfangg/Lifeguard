@@ -9,7 +9,6 @@ Alerter::Alerter(const Config& cfg) : cfg_(cfg) {}
 
 Alerter::~Alerter() {
     if (log_.is_open()) log_.close();
-    if (gpio_fd_ >= 0) fireGpio(false);
 }
 
 bool Alerter::init() {
@@ -19,16 +18,6 @@ bool Alerter::init() {
             std::fprintf(stderr, "[alerter] cannot open log %s\n",
                          cfg_.log_path.c_str());
         }
-    }
-
-    if (cfg_.alert_gpio) {
-        // TODO(bring-up): open the GPIO line for the buzzer/LED on QNX.
-        // On the Pi 5 the GPIO block lives behind the RP1; use the QNX GPIO
-        // resource manager / memory-mapped access for the pin and drive it
-        // in fireGpio().
-        std::fprintf(stderr, "[alerter] GPIO alerts requested (pin %d) — "
-                             "TODO: wire up QNX GPIO\n",
-                     cfg_.alert_gpio_pin);
     }
     return true;
 }
@@ -45,7 +34,6 @@ void Alerter::handle(const DistressAssessment& a, uint64_t timestamp_ns) {
     last_alert_ns_[a.track_id] = timestamp_ns;
 
     if (cfg_.alert_log) fireLog(a, timestamp_ns);
-    if (cfg_.alert_gpio) fireGpio(true);
 
     std::fprintf(stderr,
                  "*** DISTRESS ALERT *** track=%d score=%.2f [%s]\n",
@@ -60,11 +48,6 @@ void Alerter::fireLog(const DistressAssessment& a, uint64_t ts) {
     log_ << buf << " ALERT track=" << a.track_id << " score=" << a.score
          << " ts_ns=" << ts << " reason=\"" << a.reason << "\"\n";
     log_.flush();
-}
-
-void Alerter::fireGpio(bool on) {
-    // TODO(bring-up): drive the GPIO line high/low for the buzzer/LED.
-    (void)on;
 }
 
 }  // namespace lifeguard

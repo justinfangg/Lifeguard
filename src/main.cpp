@@ -8,7 +8,6 @@
 #include <thread>
 
 #include "lifeguard/alerter.hpp"
-#include "lifeguard/camera_source.hpp"
 #include "lifeguard/config.hpp"
 #include "lifeguard/detector.hpp"
 #include "lifeguard/distress_analyzer.hpp"
@@ -16,6 +15,7 @@
 #include "lifeguard/pose_estimator.hpp"
 #include "lifeguard/ring_buffer.hpp"
 #include "lifeguard/tracker.hpp"
+#include "lifeguard/video_source.hpp"
 
 namespace {
 
@@ -50,9 +50,9 @@ int main(int argc, char** argv) {
     }
 
     // --- Build the pipeline components ---------------------------------
-    auto camera = CameraSource::create(cfg);
-    if (!camera->open()) {
-        std::fprintf(stderr, "[main] camera open failed\n");
+    auto video = VideoSource::create(cfg);
+    if (!video->open()) {
+        std::fprintf(stderr, "[main] video open failed\n");
         return 1;
     }
 
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     std::thread capture_thread([&] {
         Frame f;
         while (g_running.load()) {
-            if (!camera->read(f)) {
+            if (!video->read(f)) {
                 std::fprintf(stderr, "[capture] end of stream / read error\n");
                 g_running.store(false);
                 break;
@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
     }
 
     capture_thread.join();
-    camera->close();
+    video->close();
     std::fprintf(stderr, "[main] shut down cleanly\n");
     return 0;
 }
