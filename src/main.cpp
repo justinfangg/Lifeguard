@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -38,6 +40,46 @@ std::string argValue(int argc, char** argv, const char* flag,
     return fallback;
 }
 
+bool hasFlag(int argc, char** argv, const char* flag) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], flag) == 0) return true;
+    }
+    return false;
+}
+
+void drawPose(cv::Mat& image, const lifeguard::Pose& pose,
+              const cv::Scalar& color) {
+    using K = lifeguard::Keypoint;
+    constexpr float kMinScore = 0.15f;
+    const std::pair<K, K> edges[] = {
+        {K::kLeftShoulder, K::kRightShoulder},
+        {K::kLeftShoulder, K::kLeftElbow},
+        {K::kLeftElbow, K::kLeftWrist},
+        {K::kRightShoulder, K::kRightElbow},
+        {K::kRightElbow, K::kRightWrist},
+        {K::kLeftShoulder, K::kLeftHip},
+        {K::kRightShoulder, K::kRightHip},
+        {K::kLeftHip, K::kRightHip},
+        {K::kLeftHip, K::kLeftKnee},
+        {K::kLeftKnee, K::kLeftAnkle},
+        {K::kRightHip, K::kRightKnee},
+        {K::kRightKnee, K::kRightAnkle}};
+    for (const auto& edge : edges) {
+        if (pose.score(edge.first) >= kMinScore &&
+            pose.score(edge.second) >= kMinScore) {
+            cv::line(image, pose.at(edge.first), pose.at(edge.second), color, 2,
+                     cv::LINE_AA);
+        }
+    }
+    for (int i = 0; i < static_cast<int>(K::kCount); ++i) {
+        const K keypoint = static_cast<K>(i);
+        if (pose.score(keypoint) >= kMinScore) {
+            cv::circle(image, pose.at(keypoint), 3, color, cv::FILLED,
+                       cv::LINE_AA);
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -55,6 +97,18 @@ int main(int argc, char** argv) {
                      "[main] could not read config '%s'; using defaults\n",
                      config_path.c_str());
     }
+    const std::string camera_override =
+        argValue(argc, argv, "--camera", "");
+    const std::string video_override =
+        argValue(argc, argv, "--video", "");
+    if (!camera_override.empty()) {
+        cfg.camera_backend = "network";
+        cfg.camera_device = camera_override;
+    } else if (!video_override.empty()) {
+        cfg.camera_backend = "file";
+        cfg.video_file = video_override;
+    }
+    if (hasFlag(argc, argv, "--headless")) cfg.display = false;
 
     if (cfg.camera_backend == "file" &&
         (cfg.video_file.empty() || !std::filesystem::exists(cfg.video_file))) {
@@ -105,7 +159,9 @@ int main(int argc, char** argv) {
     Tracker tracker;
     DistressAnalyzer analyzer({cfg.distress_score_threshold,
                                cfg.distress_persist_seconds,
-                               cfg.temporal_window_seconds});
+                               cfg.temporal_window_seconds,
+                               cfg.potential_distress_score_threshold,
+                               cfg.potential_hold_seconds});
     Alerter alerter(cfg);
     alerter.init();
 
@@ -113,6 +169,11 @@ int main(int argc, char** argv) {
                         cfg.stream_jpeg_quality});
     if (cfg.stream_enabled && !stream.start()) {
         std::fprintf(stderr, "[main] annotated preview is unavailable\n");
+    }
+    if (cfg.stream_enabled) {
+        std::fprintf(stderr,
+                     "[main] open annotated video at http://127.0.0.1:%d/video.mjpg\n",
+                     cfg.stream_port);
     }
 
     // Pace recorded clips for preview; live camera capture already blocks
@@ -123,6 +184,8 @@ int main(int argc, char** argv) {
         1.0 / std::max(1, cfg.target_fps));
     cv::VideoWriter output;
     bool output_initialized = false;
+    const auto inference_started = std::chrono::steady_clock::now();
+    uint64_t processed_frames = 0;
 
     // --- Inference and display loop ------------------------------------
     Frame frame;
@@ -144,6 +207,8 @@ int main(int argc, char** argv) {
         }
 
         cv::Mat display = frame.image.clone();
+        bool any_potential = false;
+        bool any_alert = false;
 
         if (!output_initialized && !cfg.output_video.empty()) {
             output.open(cfg.output_video,
@@ -171,20 +236,51 @@ int main(int argc, char** argv) {
                 analyzer.evaluate(t, p, frame.timestamp_ns);
             alerter.handle(a, frame.timestamp_ns);
 
-            const bool potential = a.alerting ||
-                                   a.score >= cfg.potential_distress_score_threshold;
+            const bool potential = a.alerting || a.potential;
+            any_potential = any_potential || potential;
+            any_alert = any_alert || a.alerting;
             const cv::Scalar color = potential ? cv::Scalar(0, 0, 255)
                                                : cv::Scalar(0, 220, 0);
             const cv::Rect box = roi & cv::Rect(0, 0, display.cols, display.rows);
-            cv::rectangle(display, box, color, 3);
+            cv::rectangle(display, box, color, potential ? 5 : 3);
             const std::string label = potential
                 ? (a.alerting ? "DROWNING ALERT" : "POTENTIAL DANGER")
                 : "SWIMMER";
-            cv::putText(display, label, cv::Point(box.x, std::max(20, box.y - 8)),
+            std::ostringstream details;
+            details << label << "  " << std::fixed << std::setprecision(2)
+                    << a.smoothed_score;
+            cv::putText(display, details.str(),
+                        cv::Point(box.x, std::max(20, box.y - 8)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.65, color, 2,
                         cv::LINE_AA);
+            drawPose(display, p, color);
+            if (potential && !a.reason.empty()) {
+                cv::putText(display, a.reason,
+                            cv::Point(box.x, std::min(display.rows - 8,
+                                                     box.y + box.height + 22)),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
+                            cv::LINE_AA);
+            }
         }
         analyzer.gc(tracks);
+
+        ++processed_frames;
+        const double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - inference_started).count();
+        const double fps = processed_frames / std::max(0.001, elapsed);
+        const cv::Scalar banner_color = any_potential ? cv::Scalar(0, 0, 210)
+                                                     : cv::Scalar(30, 130, 30);
+        cv::rectangle(display, cv::Rect(0, 0, display.cols, 42), banner_color,
+                      cv::FILLED);
+        std::ostringstream banner;
+        banner << (any_alert ? "DROWNING ALERT" :
+                   any_potential ? "POTENTIAL DANGER" : "MONITORING")
+               << "   swimmers=" << dets.size()
+               << "   AI=" << std::fixed << std::setprecision(1) << fps
+               << " fps";
+        cv::putText(display, banner.str(), cv::Point(14, 29),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.72, cv::Scalar(255, 255, 255),
+                    2, cv::LINE_AA);
 
         if (output.isOpened()) output.write(display);
         if (cfg.stream_enabled) stream.publish(display);

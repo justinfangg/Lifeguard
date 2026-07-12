@@ -1,71 +1,123 @@
-# Building AI Lifeguard
+# Build and test the live Pi video pipeline
 
-AI Lifeguard runs natively on a machine with OpenCV, TensorFlow Lite, and a
-camera device OpenCV can open.
+The working split is:
 
----
+- **Raspberry Pi/QNX:** capture Camera Module 3 and send MJPEG only;
+- **Mac:** receive video, run detector + MoveNet + tracking + distress logic,
+  draw overlays, record, and publish the annotated browser view.
 
-## Dependencies
+The Pi does not need TensorFlow Lite or `ai_lifeguard`.
 
-- A C++17 compiler and CMake 3.16+
-- **OpenCV** 4 or newer
-- **TensorFlow Lite** (built from the TensorFlow source tree via its CMake
-  target, which also supplies its transitive dependencies)
+## 1. Build the Mac AI application
 
 ```bash
-# macOS (Homebrew)
 brew install cmake opencv
+git submodule update --init tensorflow
 
-# Debian / Ubuntu
-sudo apt install cmake g++ libopencv-dev
-
-# TensorFlow Lite / LiteRT C++ source
-git clone --depth 1 --branch v2.16.1 \
-  https://github.com/tensorflow/tensorflow.git third_party/tensorflow
+cmake -S . -B build-host \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DTFLITE_SOURCE_DIR="$PWD/tensorflow" \
+  -DLIFEGUARD_USE_XNNPACK=OFF
+cmake --build build-host -j4
+sh scripts/check_runtime.sh config/lifeguard.conf
 ```
 
-## Configure, build, run
+TensorFlow 2.16.1 is pinned because mixing TensorFlow source with old cached
+FlatBuffers/Abseil versions causes compile failures. If changing TensorFlow
+versions, use a new empty build directory.
+
+## 2. Build only the Pi camera sender
+
+This is the small replacement for the already-working `camera_test`. It links
+OpenCV and QNX `camapi`; it does **not** build or link TensorFlow.
+
+On a machine/container that has the QNX toolchain and the same staged OpenCV
+used for the original camera test:
 
 ```bash
-# 1. Configure
-cmake -B build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DTFLITE_SOURCE_DIR="$PWD/third_party/tensorflow"
-
-# 2. Build
-cmake --build build -j
-
-# 3. Fetch the detector model
-sh scripts/fetch_models.sh
-
-# 4. Point the config at a recorded clip and run
-#    (edit config/lifeguard.conf: video_file = /path/to/pool_clip.mp4)
-./build/ai_lifeguard --config config/lifeguard.conf
+source ~/qnx800/qnxsdp-env.sh
+cmake -S . -B build-qnx-camera \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_AI_LIFEGUARD=OFF \
+  -DBUILD_CAMERA_TEST=ON \
+  -DBUILD_TESTING=OFF \
+  -DLIFEGUARD_QNX_CAMERA=ON \
+  -DLIFEGUARD_CAMERA_TEST_PREVIEW=OFF \
+  -DOpenCV_DIR=<qnx-opencv-cmake-directory>
+cmake --build build-qnx-camera --target camera_test -j4
 ```
 
-Already have TensorFlow Lite installed as a prefix instead of a source tree?
-Use `-DTFLITE_ROOT=<prefix>` in place of `-DTFLITE_SOURCE_DIR=...`.
+Copy only that binary and config:
 
-## Configuration
-
-All runtime settings live in [config/lifeguard.conf](../config/lifeguard.conf).
-The key input setting is:
-
-```ini
-video_file = samples/pool.mp4   # recorded footage to analyze
+```bash
+scp build-qnx-camera/camera_test \
+  config/lifeguard-qnx-camera.conf \
+  root@<PI-IP>:/data/home/qnxuser/lifeguard/
 ```
 
-The app decodes the file, runs detection → tracking → distress analysis, and
-writes alerts to `log_path`. It exits when the video reaches end-of-stream.
+There is no way for source changes to alter the old QNX executable already on
+the Pi: this one small camera-only binary must be compiled once. The full QNX
+TensorFlow SDK/dependency build is not needed.
 
-Use this loop to validate the detector output layout
-([src/detector.cpp](../src/detector.cpp)) and to calibrate the distress
-thresholds ([src/distress_analyzer.cpp](../src/distress_analyzer.cpp)).
+## 3. Start live video on the Pi
 
-For the simplest live-video setup, use the host webcam mode in
-[config/lifeguard.conf](../config/lifeguard.conf) and set `camera_backend = uvc`
-with `camera_device = 0`. On Raspberry Pi OS or Linux, that can be the Pi's
-camera if it enumerates as a V4L2/OpenCV device.
+Keep the verified Camera Module 3 Sensor Framework service running with camera
+unit 1. Then, on the Pi:
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the distress-detection
-rationale.
+```bash
+cd /data/home/qnxuser/lifeguard
+chmod +x camera_test
+./camera_test \
+  --config lifeguard-qnx-camera.conf \
+  --stream-port 8090 \
+  --stream-width 960 \
+  --jpeg-quality 78 \
+  --no-snapshot
+```
+
+Expected output includes `published units: 1`, the IMX708 viewfinder format,
+and `live video URL`.
+
+## 4. Tunnel the Pi stream to the Mac
+
+Use the Pi's numeric IP address; `qnxpi25` did not resolve on the Mac before.
+In a second Mac terminal:
+
+```bash
+ssh -N -L 8090:127.0.0.1:8090 root@<PI-IP>
+```
+
+Confirm raw Pi video in a browser:
+
+```text
+http://127.0.0.1:8090/video.mjpg
+```
+
+## 5. Run TensorFlow + MoveNet on the Pi video
+
+In a third Mac terminal:
+
+```bash
+cd /Users/moses/Lifeguard
+./build-host/ai_lifeguard --config config/lifeguard.conf
+```
+
+The local OpenCV window shows the result. The same annotated feed is available
+at:
+
+```text
+http://127.0.0.1:8080/video.mjpg
+```
+
+Press `q`, `Esc`, or Ctrl-C to stop. The annotated recording is written to
+`videos/lifeguard_live_annotated.mp4`.
+
+## Fast local verification
+
+Before using the Pi, exercise the exact MJPEG transport and inference path with
+the included MP4:
+
+```bash
+sh scripts/test_network_video.sh build-host
+```

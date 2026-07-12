@@ -41,6 +41,7 @@ bool Config::load(const std::string& path, Config& out) {
         if (key == "video_file") out.video_file = val;
         else if (key == "camera_device") out.camera_device = val;
         else if (key == "camera_backend") out.camera_backend = val;
+        else if (key == "camera_unit") out.camera_unit = std::stoi(val);
         else if (key == "frame_width") out.frame_width = std::stoi(val);
         else if (key == "frame_height") out.frame_height = std::stoi(val);
         else if (key == "target_fps") out.target_fps = std::stoi(val);
@@ -66,6 +67,8 @@ bool Config::load(const std::string& path, Config& out) {
             out.distress_score_threshold = std::stof(val);
         else if (key == "potential_distress_score_threshold")
             out.potential_distress_score_threshold = std::stof(val);
+        else if (key == "potential_hold_seconds")
+            out.potential_hold_seconds = std::stof(val);
         else if (key == "alert_log") out.alert_log = toBool(val);
         else if (key == "log_path") out.log_path = val;
         // Unknown keys are ignored so newer configs stay backward compatible.

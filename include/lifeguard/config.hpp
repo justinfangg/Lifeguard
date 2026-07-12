@@ -8,8 +8,10 @@ namespace lifeguard {
 struct Config {
     // --- Video input ---------------------------------------------------
     std::string video_file;              // recorded footage to analyze (MP4)
-    std::string camera_device = "/dev/video0";  // host webcam/test source
-    std::string camera_backend = "file";  // file or uvc
+    // OpenCV camera index, device path, or network MJPEG URL.
+    std::string camera_device = "http://127.0.0.1:8090/video.mjpg";
+    std::string camera_backend = "network";  // file, uvc/network, or QNX csi
+    int camera_unit = 1;                 // QSF unit used by the Pi sender
     int frame_width = 1280;
     int frame_height = 720;
     int target_fps = 15;
@@ -36,6 +38,7 @@ struct Config {
     float temporal_window_seconds = 6.0f;
     float distress_score_threshold = 0.6f;
     float potential_distress_score_threshold = 0.2f;
+    float potential_hold_seconds = 2.0f;
 
     // --- Alerting ------------------------------------------------------
     bool alert_log = true;

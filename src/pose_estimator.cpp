@@ -75,8 +75,13 @@ bool PoseEstimator::init() {
         impl_->input_w = in->dims->data[2];
     }
     impl_->input_uint8 = (in->type == kTfLiteUInt8);
-    std::fprintf(stderr, "[pose] initialized: input=%dx%d type=%d outputs=%zu\n",
+    const TfLiteTensor* output = impl_->interpreter->output_tensor(0);
+    std::fprintf(stderr,
+                 "[pose] initialized: input=%dx%d type=%d scale=%g zero=%d "
+                 "output_type=%d outputs=%zu\n",
                  impl_->input_w, impl_->input_h, static_cast<int>(in->type),
+                 in->params.scale, in->params.zero_point,
+                 output ? static_cast<int>(output->type) : -1,
                  impl_->interpreter->outputs().size());
     return true;
 }
@@ -124,7 +129,9 @@ Pose PoseEstimator::estimate(const Frame& frame, const cv::Rect& roi) {
         }
     } else {
         cv::Mat f;
-        input.convertTo(f, CV_32FC3, 1.0 / 255.0);
+        // MoveNet's float TFLite export keeps image values in the original
+        // [0,255] range (the model performs its own internal normalization).
+        input.convertTo(f, CV_32FC3);
         std::memcpy(in->data.raw, f.data, f.total() * f.elemSize());
     }
 
@@ -136,6 +143,16 @@ Pose PoseEstimator::estimate(const Frame& frame, const cv::Rect& roi) {
     // Output: [1, 1, 17, 3] as (y, x, score), normalized to the square input.
     const float* kp = impl_->interpreter->typed_output_tensor<float>(0);
     if (!kp) return pose;
+
+    static bool reported_output = false;
+    if (!reported_output) {
+        reported_output = true;
+        std::fprintf(stderr, "[pose] first keypoint scores:");
+        for (int i = 0; i < static_cast<int>(Keypoint::kCount); ++i) {
+            std::fprintf(stderr, " %.2f", kp[i * 3 + 2]);
+        }
+        std::fprintf(stderr, "\n");
+    }
 
     const int count = static_cast<int>(Keypoint::kCount);
     for (int i = 0; i < count; ++i) {

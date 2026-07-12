@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -68,7 +69,8 @@ bool MjpegServer::start() {
     }
 
     accept_thread_ = std::thread(&MjpegServer::acceptLoop, this);
-    std::fprintf(stderr, "[stream] annotated MJPEG preview on port %d\n", opts_.port);
+    std::fprintf(stderr, "[stream] MJPEG listening at http://0.0.0.0:%d/video.mjpg\n",
+                 opts_.port);
     return true;
 }
 

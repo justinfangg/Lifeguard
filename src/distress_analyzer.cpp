@@ -25,7 +25,10 @@ cv::Point2f midpoint(const cv::Point2f& a, const cv::Point2f& b) {
 float DistressAnalyzer::computeInstantScore(const Track& track,
                                             const Pose& pose,
                                             std::string& reason) const {
-    constexpr float kMinKp = 0.3f;
+    // Water, glare, and partial bodies lower pose confidence substantially.
+    // Keep this permissive for the MVP and combine several temporal signals
+    // before escalating from potential danger to a sustained alert.
+    constexpr float kMinKp = 0.15f;
     float score = 0.0f;
     reason.clear();
 
@@ -88,18 +91,34 @@ float DistressAnalyzer::computeInstantScore(const Track& track,
     }
 
     // --- Feature 4: vertical bobbing -----------------------------------
-    // Repeated up/down oscillation of the centroid within the window.
+    // Detect meaningful vertical travel. Direction changes strengthen the
+    // signal, but one sharp rise/fall is still shown as potential danger so
+    // the operator sees the red overlay early.
     if (track.centroids.size() >= 4) {
         float min_y = std::numeric_limits<float>::max();
         float max_y = std::numeric_limits<float>::lowest();
+        int reversals = 0;
+        int previous_direction = 0;
+        const float noise = std::max(2.0f, track.box.height * 0.025f);
         for (const auto& c : track.centroids) {
             min_y = std::min(min_y, c.second.y);
             max_y = std::max(max_y, c.second.y);
         }
+        for (size_t i = 1; i < track.centroids.size(); ++i) {
+            const float dy = track.centroids[i].second.y -
+                             track.centroids[i - 1].second.y;
+            if (std::abs(dy) < noise) continue;
+            const int direction = dy > 0.0f ? 1 : -1;
+            if (previous_direction != 0 && direction != previous_direction) {
+                ++reversals;
+            }
+            previous_direction = direction;
+        }
         const float body = std::max(track.box.height, 1.0f);
-        if ((max_y - min_y) > 0.3f * body) {
-            score += 0.20f;
-            reason += "bobbing ";
+        const float travel = (max_y - min_y) / body;
+        if (travel > 0.18f) {
+            score += reversals >= 2 ? 0.35f : 0.25f;
+            reason += reversals >= 2 ? "repeated-bobbing " : "vertical-motion ";
         }
     }
 
@@ -116,7 +135,21 @@ DistressAssessment DistressAnalyzer::evaluate(const Track& track,
     State& st = state_[track.id];
     st.last_score = result.score;
 
-    if (result.score >= opts_.score_threshold) {
+    // Light temporal smoothing keeps the UI from flashing green between
+    // adjacent danger frames. A potential condition is latched briefly so a
+    // lifeguard has time to see it while the stricter alert timer continues.
+    st.smoothed_score = st.smoothed_score == 0.0f
+                            ? result.score
+                            : 0.65f * st.smoothed_score + 0.35f * result.score;
+    result.smoothed_score = st.smoothed_score;
+    if (result.score >= opts_.potential_threshold ||
+        st.smoothed_score >= opts_.potential_threshold) {
+        st.potential_until_ns = timestamp_ns + static_cast<uint64_t>(
+            std::max(0.0f, opts_.potential_hold_seconds) * kNsPerSec);
+    }
+    result.potential = timestamp_ns <= st.potential_until_ns;
+
+    if (std::max(result.score, st.smoothed_score) >= opts_.score_threshold) {
         if (st.distress_since_ns == 0) {
             st.distress_since_ns = timestamp_ns;
         }

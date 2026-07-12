@@ -30,6 +30,7 @@ debug_frames/
 *.swp
 .DS_Store
 Thumbs.db
+lifeguard.log
 
 # CMake
 CMakeCache.txt

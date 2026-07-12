@@ -12,6 +12,8 @@ namespace lifeguard {
 struct DistressAssessment {
     int track_id = -1;
     float score = 0.0f;   // instantaneous distress score [0,1]
+    float smoothed_score = 0.0f;
+    bool potential = false;
     bool alerting = false; // condition has persisted long enough to alert
     std::string reason;    // human-readable explanation for logs/UI
 };
@@ -33,6 +35,8 @@ public:
         float score_threshold = 0.6f;   // instantaneous distress cutoff
         float persist_seconds = 4.0f;   // must hold this long to alert
         float window_seconds = 6.0f;    // motion feature window
+        float potential_threshold = 0.2f;
+        float potential_hold_seconds = 2.0f;
     };
 
     DistressAnalyzer() = default;
@@ -49,7 +53,9 @@ public:
 private:
     struct State {
         uint64_t distress_since_ns = 0;  // 0 == not currently distressed
+        uint64_t potential_until_ns = 0;
         float last_score = 0.0f;
+        float smoothed_score = 0.0f;
     };
 
     float computeInstantScore(const Track& track, const Pose& pose,

@@ -18,6 +18,20 @@
 
 namespace lifeguard {
 
+namespace {
+float overlap(const cv::Rect2f& a, const cv::Rect2f& b) {
+    const cv::Rect2f intersection = a & b;
+    const float inter = std::max(0.0f, intersection.area());
+    const float combined = a.area() + b.area() - inter;
+    return combined > 0.0f ? inter / combined : 0.0f;
+}
+
+float containment(const cv::Rect2f& a, const cv::Rect2f& b) {
+    const float smaller = std::min(a.area(), b.area());
+    return smaller > 0.0f ? (a & b).area() / smaller : 0.0f;
+}
+}  // namespace
+
 struct Detector::Impl {
     std::unique_ptr<tflite::FlatBufferModel> model;
     std::unique_ptr<tflite::Interpreter> interpreter;
@@ -172,10 +186,26 @@ std::vector<Detection> Detector::detect(const Frame& frame) {
         det.box.y = (ymin - tf.pad_y) / tf.scale;
         det.box.width = (xmax - xmin) / tf.scale;
         det.box.height = (ymax - ymin) / tf.scale;
-        out.push_back(det);
+        if (det.box.width > 2.0f && det.box.height > 2.0f) out.push_back(det);
     }
 
-    return out;
+    // Detection PostProcess usually applies NMS, but several exported models
+    // still return duplicate person boxes. Suppress them here so one swimmer
+    // gets one stable track and one readable overlay.
+    std::sort(out.begin(), out.end(), [](const Detection& a, const Detection& b) {
+        return a.score > b.score;
+    });
+    std::vector<Detection> filtered;
+    for (const Detection& candidate : out) {
+        const bool duplicate = std::any_of(
+            filtered.begin(), filtered.end(), [&](const Detection& kept) {
+                return overlap(candidate.box, kept.box) > opts_.nms_iou_threshold ||
+                       containment(candidate.box, kept.box) > 0.75f;
+            });
+        if (!duplicate) filtered.push_back(candidate);
+    }
+
+    return filtered;
 }
 
 }  // namespace lifeguard
