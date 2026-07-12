@@ -35,7 +35,8 @@ public:
         float window_seconds = 6.0f;    // motion feature window
     };
 
-    explicit DistressAnalyzer(Options opts = {}) : opts_(opts) {}
+    DistressAnalyzer() = default;
+    explicit DistressAnalyzer(const Options& opts) : opts_(opts) {}
 
     // Evaluate one tracked swimmer given its latest pose.
     DistressAssessment evaluate(const Track& track,

@@ -18,6 +18,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Apple Clang 21 deprecates the builtin used by the vendored Abseil release
+# pulled in by TensorFlow Lite. Keep this third-party compatibility warning
+# from obscuring actual project diagnostics.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+  add_compile_options(-Wno-deprecated-builtins)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
@@ -25,6 +32,8 @@ endif()
 # --- Build options ---------------------------------------------------------
 option(BUILD_AI_LIFEGUARD "Build the TensorFlow Lite inference application" ON)
 option(BUILD_CAMERA_TEST "Build the standalone camera smoke-test tool" ON)
+option(LIFEGUARD_CAMERA_TEST_PREVIEW
+  "Show a live OpenCV preview window in the host camera smoke test" ON)
 
 # QNX camera/screen libraries are linked when the real capture backend is
 # enabled. Kept optional so the skeleton builds before bring-up.
@@ -122,6 +131,10 @@ endif()
 # A minimal executable that only needs OpenCV (no TensorFlow Lite / models),
 # used to verify a physical webcam captures frames. Build both host and QNX.
 if(BUILD_CAMERA_TEST)
+  if(LIFEGUARD_CAMERA_TEST_PREVIEW AND NOT CMAKE_SYSTEM_NAME STREQUAL "QNX")
+    find_package(OpenCV REQUIRED COMPONENTS highgui)
+  endif()
+
   add_executable(camera_test
     tools/camera_test.cpp
     src/config.cpp
@@ -132,6 +145,10 @@ if(BUILD_CAMERA_TEST)
     ${OpenCV_INCLUDE_DIRS})
 
   target_link_libraries(camera_test PRIVATE ${OpenCV_LIBS})
+
+  if(LIFEGUARD_CAMERA_TEST_PREVIEW AND NOT CMAKE_SYSTEM_NAME STREQUAL "QNX")
+    target_compile_definitions(camera_test PRIVATE LIFEGUARD_CAMERA_TEST_PREVIEW=1)
+  endif()
 
   if(LIFEGUARD_QNX_CAMERA)
     target_compile_definitions(camera_test PRIVATE LIFEGUARD_QNX_CAMERA=1)

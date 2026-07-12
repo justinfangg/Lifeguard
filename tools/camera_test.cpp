@@ -18,6 +18,9 @@
 #include <string>
 
 #include <opencv2/imgcodecs.hpp>
+#ifdef LIFEGUARD_CAMERA_TEST_PREVIEW
+#include <opencv2/highgui.hpp>
+#endif
 
 #include "lifeguard/camera_source.hpp"
 #include "lifeguard/config.hpp"
@@ -28,7 +31,9 @@ int main(int argc, char** argv) {
 
     std::string config_path = "config/lifeguard.conf";
     std::string snapshot = "camera_test.jpg";
-    int max_frames = 100;
+    // Run continuously by default. --frames remains useful for automated
+    // smoke tests, where a positive value exits after that many frames.
+    int max_frames = 0;
 
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--config") == 0) {
@@ -60,7 +65,12 @@ int main(int argc, char** argv) {
     bool saved = false;
     const auto t0 = std::chrono::steady_clock::now();
 
-    while (count < max_frames) {
+#ifdef LIFEGUARD_CAMERA_TEST_PREVIEW
+    constexpr const char* kWindowName = "AI Lifeguard Camera";
+    cv::namedWindow(kWindowName, cv::WINDOW_NORMAL);
+#endif
+
+    while (max_frames <= 0 || count < max_frames) {
         if (!cam->read(frame) || frame.image.empty()) {
             std::fprintf(stderr, "[camtest] read failed at frame %d\n", count);
             break;
@@ -78,11 +88,20 @@ int main(int argc, char** argv) {
             saved = true;
         }
         ++count;
+
+#ifdef LIFEGUARD_CAMERA_TEST_PREVIEW
+        cv::imshow(kWindowName, frame.image);
+        const int key = cv::waitKey(1);
+        if (key == 'q' || key == 'Q' || key == 27) break;
+#endif
     }
 
     const auto t1 = std::chrono::steady_clock::now();
     const double secs = std::chrono::duration<double>(t1 - t0).count();
     cam->close();
+#ifdef LIFEGUARD_CAMERA_TEST_PREVIEW
+    cv::destroyWindow(kWindowName);
+#endif
 
     if (count == 0) {
         std::fprintf(stderr, "[camtest] no frames captured\n");
