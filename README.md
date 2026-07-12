@@ -1,11 +1,11 @@
-# AI Lifeguard (QNX 8.0 · Raspberry Pi 5)
+# AI Lifeguard
 
-An embedded QNX application that watches a swimming pool through a camera and
-raises an alert when it detects a **distressed / drowning swimmer**.
+A software application that watches recorded swimming-pool footage and raises an
+alert when it detects a **distressed / drowning swimmer**.
 
-It runs a real-time computer-vision pipeline built on **OpenCV** and
-**TensorFlow Lite** (both from [oss.qnx.com](https://oss.qnx.com)) on the
-Cortex-A cores of a Raspberry Pi 5 running QNX SDP 8.0.
+It runs a computer-vision pipeline built on **OpenCV** and **TensorFlow Lite**,
+analyzing video files (e.g. MP4) frame by frame. It is a pure host application —
+no camera hardware and no target board required.
 
 > ⚠️ **Safety notice.** This is experimental software and **must not** be relied
 > upon as a substitute for a trained human lifeguard. Treat any alert as an
@@ -16,22 +16,22 @@ Cortex-A cores of a Raspberry Pi 5 running QNX SDP 8.0.
 ## How it works
 
 ```
- Camera ──► Capture ──► Ring buffer ──► Pre-process ──► Detect swimmers
+ MP4 file ─► Decode ─► Ring buffer ─► Pre-process ─► Detect swimmers
                                                               │
                                                               ▼
-   Alarm ◄── Distress logic ◄── Temporal window ◄── Pose / behaviour
+   Alarm ◄─ Distress logic ◄─ Temporal window ◄─ Pose / behaviour
 ```
 
 | Stage | Component | Tech |
 |-------|-----------|------|
-| Capture | `CameraSource` | QNX camera framework (UVC) / CSI |
+| Decode | `VideoSource` | OpenCV `VideoCapture` (MP4 / video file) |
 | Buffering | `RingBuffer` | lock-free SPSC queue |
 | Pre-process | `Preprocess` | OpenCV resize / normalize |
 | Detect swimmers | `Detector` | TFLite (MobileNet-SSD / nano-YOLO, int8) |
 | Track | `Tracker` | IOU/SORT-style ID association |
 | Pose | `PoseEstimator` | TFLite MoveNet Lightning (int8) |
 | Behaviour | `DistressAnalyzer` | temporal rule-based scorer + debounce |
-| Alert | `Alerter` | GPIO buzzer / log / network event |
+| Alert | `Alerter` | log / network event |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and the
 reasoning behind the drowning-detection approach.
@@ -57,62 +57,54 @@ alarms from normal treading/floating low.
 ```
 Lifeguard/
 ├── CMakeLists.txt            Top-level build
-├── cmake/qnx-toolchain.cmake QNX SDP 8.0 aarch64 toolchain file
 ├── include/lifeguard/        Public headers (one per pipeline stage)
 ├── src/                      Implementations + main.cpp
 ├── config/lifeguard.conf     Runtime configuration
 ├── models/                   TFLite models (not committed – see scripts)
-├── scripts/                  Env setup + model fetch helpers
+├── scripts/                  Model fetch helper
 └── docs/ARCHITECTURE.md      Design notes
 ```
 
-> See [`docs/BUILD.md`](docs/BUILD.md) for the full host + cross-compile
-> workflow, including the `scripts/build_deps_qnx.sh` dependency builder.
+> See [`docs/BUILD.md`](docs/BUILD.md) for the full build + run workflow.
 
-## Building (on the host, cross-compiling for QNX aarch64)
+## Building
 
 Prerequisites:
 
-- QNX SDP 8.0 installed, with the environment sourced:
-  ```bash
-  source ~/qnx800/qnxsdp-env.sh
-  ```
-- OpenCV and TensorFlow Lite for QNX aarch64 (`aarch64le`) — either the
-  prebuilt packages from oss.qnx.com or your own cross-build. Point CMake at
-  them with `-DOpenCV_DIR=...` and `-DTFLITE_ROOT=...`.
+- A C++17 compiler and CMake 3.16+
+- **OpenCV** 4 or newer (`brew install opencv`, `apt install libopencv-dev`, …)
+- **TensorFlow Lite** — point CMake at a TensorFlow source tree
+  (`-DTFLITE_SOURCE_DIR=<tensorflow>`) or an installed prefix
+  (`-DTFLITE_ROOT=<prefix>`).
 
 ```bash
 # 1. Configure
-cmake -B build \
-      -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DOpenCV_DIR=$QNX_TARGET/usr/lib/cmake/opencv4 \
-      -DTFLITE_ROOT=/path/to/tflite-qnx-aarch64
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+      -DTFLITE_SOURCE_DIR=/path/to/tensorflow
 
 # 2. Build
 cmake --build build -j
 
-# 3. Copy the binary + models + config to the target (example)
-scp build/ai_lifeguard config/lifeguard.conf root@<pi5-ip>:/data/lifeguard/
-scp models/*.tflite root@<pi5-ip>:/data/lifeguard/models/
+# 3. Fetch the detector model
+sh scripts/fetch_models.sh
 ```
 
-## Running (on the Pi 5 / QNX)
+## Running
 
 ```bash
-# on the target
-cd /data/lifeguard
-./ai_lifeguard --config lifeguard.conf
+# Point video_file in config/lifeguard.conf at your footage, then:
+./build/ai_lifeguard --config config/lifeguard.conf
 ```
+
+The app decodes the video file, runs detection + tracking + distress analysis,
+and logs alerts to `log_path` (default `lifeguard.log`). It exits when the
+video reaches end-of-stream.
 
 ## Roadmap / status
 
 - [x] Project scaffold, build system, pipeline interfaces
-- [ ] Camera capture bring-up (start with USB/UVC, then CSI/IMX708)
-- [ ] Wire OpenCV pre-processing to live frames
+- [x] Video-file input via OpenCV
 - [ ] Integrate TFLite detector (XNNPACK delegate, int8)
 - [ ] Tracker + MoveNet pose + temporal distress logic
-- [ ] Alerting (GPIO / log / network) + watchdog
-- [ ] Field calibration & false-alarm tuning
-
-See inline `TODO(bring-up)` markers in the source for the concrete next steps.
+- [ ] Alerting (log / network event)
+- [ ] Calibration & false-alarm tuning

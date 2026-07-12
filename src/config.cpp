@@ -38,10 +38,7 @@ bool Config::load(const std::string& path, Config& out) {
         const std::string key = trim(line.substr(0, eq));
         const std::string val = trim(line.substr(eq + 1));
 
-        if (key == "camera_backend") out.camera_backend = val;
-        else if (key == "camera_device") out.camera_device = val;
-        else if (key == "camera_unit") out.camera_unit = std::stoi(val);
-        else if (key == "video_file") out.video_file = val;
+        if (key == "video_file") out.video_file = val;
         else if (key == "frame_width") out.frame_width = std::stoi(val);
         else if (key == "frame_height") out.frame_height = std::stoi(val);
         else if (key == "target_fps") out.target_fps = std::stoi(val);
@@ -56,8 +53,6 @@ bool Config::load(const std::string& path, Config& out) {
             out.distress_persist_seconds = std::stof(val);
         else if (key == "temporal_window_seconds")
             out.temporal_window_seconds = std::stof(val);
-        else if (key == "alert_gpio") out.alert_gpio = toBool(val);
-        else if (key == "alert_gpio_pin") out.alert_gpio_pin = std::stoi(val);
         else if (key == "alert_log") out.alert_log = toBool(val);
         else if (key == "log_path") out.log_path = val;
         // Unknown keys are ignored so newer configs stay backward compatible.

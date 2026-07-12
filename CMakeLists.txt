@@ -2,16 +2,15 @@ cmake_minimum_required(VERSION 3.16)
 project(ai_lifeguard LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
-# AI Lifeguard — QNX 8.0 / Raspberry Pi 5
+# AI Lifeguard — software-only build
 #
-# Cross-compiled for QNX aarch64 (aarch64le). Configure with the bundled
-# toolchain file:
+# A native host application that analyzes recorded pool footage (MP4) with a
+# computer-vision pipeline built on OpenCV and TensorFlow Lite.
 #
-#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-toolchain.cmake ...
-#
-# Dependencies (from oss.qnx.com or your own cross-build):
-#   * OpenCV 4 or newer -> pass -DOpenCV_DIR=<...>/lib/cmake/opencv4
-#   * TensorFlow Lite -> pass -DTFLITE_ROOT=<tflite install prefix>
+# Dependencies:
+#   * OpenCV 4 or newer -> pass -DOpenCV_DIR=<...>/lib/cmake/opencv4 if needed
+#   * TensorFlow Lite -> pass -DTFLITE_SOURCE_DIR=<tensorflow source> or
+#                        -DTFLITE_ROOT=<tflite install prefix>
 # ---------------------------------------------------------------------------
 
 set(CMAKE_CXX_STANDARD 17)
@@ -31,16 +30,8 @@ endif()
 
 # --- Build options ---------------------------------------------------------
 option(BUILD_AI_LIFEGUARD "Build the TensorFlow Lite inference application" ON)
-option(BUILD_CAMERA_TEST "Build the standalone camera smoke-test tool" ON)
-option(LIFEGUARD_CAMERA_TEST_PREVIEW
-  "Show a live OpenCV preview window in the host camera smoke test" ON)
-
-# QNX camera/screen libraries are linked when the real capture backend is
-# enabled. Kept optional so the skeleton builds before bring-up.
-option(LIFEGUARD_QNX_CAMERA "Link against the QNX camera framework" OFF)
 
 # --- OpenCV ----------------------------------------------------------------
-# The QNX dependency build uses OpenCV 4 while current Homebrew supplies 5.
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 # --- Main inference application --------------------------------------------
@@ -100,7 +91,7 @@ if(BUILD_AI_LIFEGUARD)
   add_executable(ai_lifeguard
     src/main.cpp
     src/config.cpp
-    src/camera_source.cpp
+    src/video_source.cpp
     src/preprocess.cpp
     src/detector.cpp
     src/pose_estimator.cpp
@@ -118,43 +109,6 @@ if(BUILD_AI_LIFEGUARD)
 
   target_link_libraries(ai_lifeguard PRIVATE ${OpenCV_LIBS} ${TFLITE_TARGET})
 
-  if(LIFEGUARD_QNX_CAMERA)
-    target_compile_definitions(ai_lifeguard PRIVATE LIFEGUARD_QNX_CAMERA=1)
-    target_link_libraries(ai_lifeguard PRIVATE camapi screen)
-  endif()
-
   target_compile_options(ai_lifeguard PRIVATE -Wall -Wextra -O2)
   install(TARGETS ai_lifeguard RUNTIME DESTINATION bin)
-endif()
-
-# --- Camera smoke-test tool ------------------------------------------------
-# A minimal executable that only needs OpenCV (no TensorFlow Lite / models),
-# used to verify a physical webcam captures frames. Build both host and QNX.
-if(BUILD_CAMERA_TEST)
-  if(LIFEGUARD_CAMERA_TEST_PREVIEW AND NOT CMAKE_SYSTEM_NAME STREQUAL "QNX")
-    find_package(OpenCV REQUIRED COMPONENTS highgui)
-  endif()
-
-  add_executable(camera_test
-    tools/camera_test.cpp
-    src/config.cpp
-    src/camera_source.cpp)
-
-  target_include_directories(camera_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${OpenCV_INCLUDE_DIRS})
-
-  target_link_libraries(camera_test PRIVATE ${OpenCV_LIBS})
-
-  if(LIFEGUARD_CAMERA_TEST_PREVIEW AND NOT CMAKE_SYSTEM_NAME STREQUAL "QNX")
-    target_compile_definitions(camera_test PRIVATE LIFEGUARD_CAMERA_TEST_PREVIEW=1)
-  endif()
-
-  if(LIFEGUARD_QNX_CAMERA)
-    target_compile_definitions(camera_test PRIVATE LIFEGUARD_QNX_CAMERA=1)
-    target_link_libraries(camera_test PRIVATE camapi screen)
-  endif()
-
-  target_compile_options(camera_test PRIVATE -Wall -Wextra -O2)
-  install(TARGETS camera_test RUNTIME DESTINATION bin)
 endif()

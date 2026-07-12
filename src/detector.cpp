@@ -49,7 +49,7 @@ bool Detector::init() {
         return false;
     }
 
-    // CPU acceleration via XNNPACK (the only practical delegate on QNX/Pi).
+    // CPU acceleration via the XNNPACK delegate.
     TfLiteXNNPackDelegateOptions xopts = TfLiteXNNPackDelegateOptionsDefault();
     xopts.num_threads = opts_.num_threads;
     impl_->xnnpack = TfLiteXNNPackDelegateCreate(&xopts);
