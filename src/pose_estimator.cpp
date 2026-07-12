@@ -10,20 +10,26 @@
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
+#ifdef LIFEGUARD_USE_XNNPACK
 #include "tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h"
+#endif
 
 namespace lifeguard {
 
 struct PoseEstimator::Impl {
     std::unique_ptr<tflite::FlatBufferModel> model;
     std::unique_ptr<tflite::Interpreter> interpreter;
+#ifdef LIFEGUARD_USE_XNNPACK
     TfLiteDelegate* xnnpack = nullptr;
+#endif
     int input_w = 192;   // MoveNet Lightning default
     int input_h = 192;
     bool input_uint8 = true;
 
     ~Impl() {
+#ifdef LIFEGUARD_USE_XNNPACK
         if (xnnpack) TfLiteXNNPackDelegateDelete(xnnpack);
+#endif
     }
 };
 
@@ -48,12 +54,14 @@ bool PoseEstimator::init() {
         return false;
     }
 
+#ifdef LIFEGUARD_USE_XNNPACK
     TfLiteXNNPackDelegateOptions xopts = TfLiteXNNPackDelegateOptionsDefault();
     xopts.num_threads = opts_.num_threads;
     impl_->xnnpack = TfLiteXNNPackDelegateCreate(&xopts);
     if (impl_->xnnpack) {
         impl_->interpreter->ModifyGraphWithDelegate(impl_->xnnpack);
     }
+#endif
 
     if (impl_->interpreter->AllocateTensors() != kTfLiteOk) {
         std::fprintf(stderr, "[pose] AllocateTensors failed\n");
@@ -67,6 +75,9 @@ bool PoseEstimator::init() {
         impl_->input_w = in->dims->data[2];
     }
     impl_->input_uint8 = (in->type == kTfLiteUInt8);
+    std::fprintf(stderr, "[pose] initialized: input=%dx%d type=%d outputs=%zu\n",
+                 impl_->input_w, impl_->input_h, static_cast<int>(in->type),
+                 impl_->interpreter->outputs().size());
     return true;
 }
 
@@ -95,6 +106,22 @@ Pose PoseEstimator::estimate(const Frame& frame, const cv::Rect& roi) {
     TfLiteTensor* in = impl_->interpreter->tensor(in_idx);
     if (impl_->input_uint8) {
         std::memcpy(in->data.raw, input.data, input.total() * input.elemSize());
+    } else if (in->type == kTfLiteInt8) {
+        cv::Mat f;
+        input.convertTo(f, CV_32FC3);
+        const float scale = in->params.scale > 0.0f ? in->params.scale : 1.0f;
+        auto* dst = in->data.int8;
+        for (int y = 0; y < f.rows; ++y) {
+            const auto* row = f.ptr<cv::Vec3f>(y);
+            for (int x = 0; x < f.cols; ++x) {
+                for (int c = 0; c < 3; ++c) {
+                    const int q = static_cast<int>(row[x][c] / scale) +
+                                  in->params.zero_point;
+                    dst[(y * f.cols + x) * 3 + c] =
+                        static_cast<int8_t>(std::clamp(q, -128, 127));
+                }
+            }
+        }
     } else {
         cv::Mat f;
         input.convertTo(f, CV_32FC3, 1.0 / 255.0);

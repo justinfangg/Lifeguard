@@ -16,7 +16,7 @@ no camera hardware and no target board required.
 ## How it works
 
 ```
- MP4 file ─► Decode ─► Ring buffer ─► Pre-process ─► Detect swimmers
+ MP4 file ─► Decode ─► Real-time pacing ─► Pre-process ─► Detect swimmers
                                                               │
                                                               ▼
    Alarm ◄─ Distress logic ◄─ Temporal window ◄─ Pose / behaviour
@@ -80,7 +80,8 @@ Prerequisites:
 ```bash
 # 1. Configure
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
-      -DTFLITE_SOURCE_DIR=/path/to/tensorflow
+      -DTFLITE_SOURCE_DIR=/path/to/tensorflow \
+      -DTENSORFLOW_OFFLINE=OFF
 
 # 2. Build
 cmake --build build -j
@@ -89,6 +90,11 @@ cmake --build build -j
 sh scripts/fetch_models.sh
 ```
 
+The normal build downloads TensorFlow Lite's pinned CMake dependencies
+(Abseil, protobuf, FlatBuffers, XNNPACK, and related libraries). Use
+`-DTENSORFLOW_OFFLINE=ON` only when those exact dependencies have already been
+populated locally; stale dependency copies can produce version-mismatch errors.
+
 ## Running
 
 ```bash
@@ -96,9 +102,30 @@ sh scripts/fetch_models.sh
 ./build/ai_lifeguard --config config/lifeguard.conf
 ```
 
-The app decodes the video file, runs detection + tracking + distress analysis,
-and logs alerts to `log_path` (default `lifeguard.log`). It exits when the
-video reaches end-of-stream.
+The app decodes the video file, runs the detector and MoveNet pose model,
+displays swimmer and distress overlays in an OpenCV window, and writes the
+annotated stream to `output_video` (default
+`videos/lifeguard_annotated.mp4`). Alerts are also logged to `log_path`
+(default `lifeguard.log`). Press `q` or `Esc` to stop.
+
+For a headless smoke test, set `display = false` in the config. The application
+fails early with a clear message if the video or detector model is missing.
+
+### Calibration
+
+The detector and distress thresholds are configurable:
+
+```ini
+detector_score_threshold = 0.5
+distress_score_threshold = 0.6
+distress_persist_seconds = 4.0
+temporal_window_seconds  = 6.0
+person_class_id          = 1
+```
+
+Review the red-box overlays on representative pool footage, then adjust the
+thresholds to balance swimmer recall and alert frequency. This remains an
+experimental rule-based aid, not a validated drowning detector.
 
 ## Roadmap / status
 

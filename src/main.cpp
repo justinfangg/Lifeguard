@@ -4,18 +4,25 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <thread>
 
+#include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
+#if !defined(__QNXNTO__)
+#include <opencv2/highgui.hpp>
+#endif
+
 #include "lifeguard/alerter.hpp"
+#include "lifeguard/camera_source.hpp"
 #include "lifeguard/config.hpp"
 #include "lifeguard/detector.hpp"
 #include "lifeguard/distress_analyzer.hpp"
 #include "lifeguard/frame.hpp"
+#include "lifeguard/mjpeg_server.hpp"
 #include "lifeguard/pose_estimator.hpp"
-#include "lifeguard/ring_buffer.hpp"
 #include "lifeguard/tracker.hpp"
-#include "lifeguard/video_source.hpp"
 
 namespace {
 
@@ -49,10 +56,23 @@ int main(int argc, char** argv) {
                      config_path.c_str());
     }
 
+    if (cfg.camera_backend == "file" &&
+        (cfg.video_file.empty() || !std::filesystem::exists(cfg.video_file))) {
+        std::fprintf(stderr, "[main] video file not found: %s\n",
+                     cfg.video_file.c_str());
+        return 1;
+    }
+    if (cfg.detector_model.empty() ||
+        !std::filesystem::exists(cfg.detector_model)) {
+        std::fprintf(stderr, "[main] detector model not found: %s\n",
+                     cfg.detector_model.c_str());
+        return 1;
+    }
+
     // --- Build the pipeline components ---------------------------------
-    auto video = VideoSource::create(cfg);
-    if (!video->open()) {
-        std::fprintf(stderr, "[main] video open failed\n");
+    auto camera = CameraSource::create(cfg);
+    if (!camera->open()) {
+        std::fprintf(stderr, "[main] camera open failed\n");
         return 1;
     }
 
@@ -67,48 +87,78 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    PoseEstimator pose({cfg.pose_model, std::max(1, cfg.num_threads / 2)});
-    const bool pose_ok = pose.init();
-    if (!pose_ok) {
+    if (cfg.pose_model.empty() || !std::filesystem::exists(cfg.pose_model)) {
         std::fprintf(stderr,
-                     "[main] pose model unavailable; running detection + "
-                     "motion-based distress features only\n");
+                     "[main] MoveNet pose model not found: %s\n"
+                     "[main] download MoveNet Lightning and place it at that path\n",
+                     cfg.pose_model.c_str());
+        return 1;
     }
 
+    PoseEstimator pose({cfg.pose_model, std::max(1, cfg.num_threads / 2)});
+    if (!pose.init()) {
+        std::fprintf(stderr, "[main] MoveNet pose initialization failed\n");
+        return 1;
+    }
+    std::fprintf(stderr, "[main] detector and MoveNet models initialized\n");
+
     Tracker tracker;
-    DistressAnalyzer analyzer({0.6f, cfg.distress_persist_seconds,
+    DistressAnalyzer analyzer({cfg.distress_score_threshold,
+                               cfg.distress_persist_seconds,
                                cfg.temporal_window_seconds});
     Alerter alerter(cfg);
     alerter.init();
 
-    // Shared frame queue between capture and inference threads.
-    RingBuffer<Frame, 4> queue;
+    MjpegServer stream({cfg.stream_port, cfg.stream_width,
+                        cfg.stream_jpeg_quality});
+    if (cfg.stream_enabled && !stream.start()) {
+        std::fprintf(stderr, "[main] annotated preview is unavailable\n");
+    }
 
-    // --- Capture thread ------------------------------------------------
-    std::thread capture_thread([&] {
-        Frame f;
-        while (g_running.load()) {
-            if (!video->read(f)) {
-                std::fprintf(stderr, "[capture] end of stream / read error\n");
-                g_running.store(false);
-                break;
-            }
-            queue.push(f);  // drop-oldest if the consumer is behind
-        }
-    });
+    // Pace recorded clips for preview; live camera capture already blocks
+    // until OpenCV supplies a new frame.
+    const bool file_input = cfg.camera_backend == "file";
+    const auto playback_start = std::chrono::steady_clock::now();
+    const auto frame_period = std::chrono::duration<double>(
+        1.0 / std::max(1, cfg.target_fps));
+    cv::VideoWriter output;
+    bool output_initialized = false;
 
-    // --- Inference loop (main thread) ----------------------------------
-    while (g_running.load()) {
-        auto maybe = queue.pop();
-        if (!maybe) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
+    // --- Inference and display loop ------------------------------------
+    Frame frame;
+    while (g_running.load() && camera->read(frame)) {
+        if (file_input) {
+            const auto target_time = playback_start +
+                frame_period * static_cast<double>(frame.index);
+            std::this_thread::sleep_until(target_time);
         }
-        Frame frame = std::move(*maybe);
 
         const std::vector<Detection> dets = detector.detect(frame);
         const std::vector<Track>& tracks =
             tracker.update(dets, frame.timestamp_ns);
+
+        if (frame.index < 5 || frame.index % 30 == 0) {
+            std::fprintf(stderr, "[pipeline] frame=%llu detections=%zu tracks=%zu\n",
+                         static_cast<unsigned long long>(frame.index),
+                         dets.size(), tracks.size());
+        }
+
+        cv::Mat display = frame.image.clone();
+
+        if (!output_initialized && !cfg.output_video.empty()) {
+            output.open(cfg.output_video,
+                        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                        static_cast<double>(std::max(1, cfg.target_fps)),
+                        display.size(), true);
+            output_initialized = true;
+            if (!output.isOpened()) {
+                std::fprintf(stderr, "[main] could not open output video: %s\n",
+                             cfg.output_video.c_str());
+            } else {
+                std::fprintf(stderr, "[main] writing annotated video: %s\n",
+                             cfg.output_video.c_str());
+            }
+        }
 
         for (const Track& t : tracks) {
             if (t.misses > 0) continue;  // only assess freshly-seen swimmers
@@ -116,16 +166,47 @@ int main(int argc, char** argv) {
                 static_cast<int>(t.box.x), static_cast<int>(t.box.y),
                 static_cast<int>(t.box.width),
                 static_cast<int>(t.box.height));
-            const Pose p = pose_ok ? pose.estimate(frame, roi) : Pose{};
+            const Pose p = pose.estimate(frame, roi);
             const DistressAssessment a =
                 analyzer.evaluate(t, p, frame.timestamp_ns);
             alerter.handle(a, frame.timestamp_ns);
+
+            const bool potential = a.alerting ||
+                                   a.score >= cfg.potential_distress_score_threshold;
+            const cv::Scalar color = potential ? cv::Scalar(0, 0, 255)
+                                               : cv::Scalar(0, 220, 0);
+            const cv::Rect box = roi & cv::Rect(0, 0, display.cols, display.rows);
+            cv::rectangle(display, box, color, 3);
+            const std::string label = potential
+                ? (a.alerting ? "DROWNING ALERT" : "POTENTIAL DANGER")
+                : "SWIMMER";
+            cv::putText(display, label, cv::Point(box.x, std::max(20, box.y - 8)),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.65, color, 2,
+                        cv::LINE_AA);
         }
         analyzer.gc(tracks);
+
+        if (output.isOpened()) output.write(display);
+        if (cfg.stream_enabled) stream.publish(display);
+
+        #if !defined(__QNXNTO__)
+        if (cfg.display) {
+            cv::imshow("AI Lifeguard", display);
+            const int key = cv::waitKey(1);
+            if (key == 27 || key == 'q' || key == 'Q') break;
+        }
+        #endif
     }
 
-    capture_thread.join();
-    video->close();
+    if (g_running.load()) {
+        std::fprintf(stderr, "[capture] end of stream / read error\n");
+    }
+    #if !defined(__QNXNTO__)
+    if (cfg.display) cv::destroyAllWindows();
+    #endif
+    if (output.isOpened()) output.release();
+    stream.stop();
+    camera->close();
     std::fprintf(stderr, "[main] shut down cleanly\n");
     return 0;
 }

@@ -10,7 +10,9 @@
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
+#ifdef LIFEGUARD_USE_XNNPACK
 #include "tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h"
+#endif
 
 #include "lifeguard/preprocess.hpp"
 
@@ -19,12 +21,16 @@ namespace lifeguard {
 struct Detector::Impl {
     std::unique_ptr<tflite::FlatBufferModel> model;
     std::unique_ptr<tflite::Interpreter> interpreter;
+#ifdef LIFEGUARD_USE_XNNPACK
     TfLiteDelegate* xnnpack = nullptr;
+#endif
     int input_w = 320;
     int input_h = 320;
 
     ~Impl() {
+#ifdef LIFEGUARD_USE_XNNPACK
         if (xnnpack) TfLiteXNNPackDelegateDelete(xnnpack);
+#endif
     }
 };
 
@@ -49,7 +55,8 @@ bool Detector::init() {
         return false;
     }
 
-    // CPU acceleration via the XNNPACK delegate.
+    // Optional CPU acceleration via the XNNPACK delegate.
+#ifdef LIFEGUARD_USE_XNNPACK
     TfLiteXNNPackDelegateOptions xopts = TfLiteXNNPackDelegateOptionsDefault();
     xopts.num_threads = opts_.num_threads;
     impl_->xnnpack = TfLiteXNNPackDelegateCreate(&xopts);
@@ -57,8 +64,9 @@ bool Detector::init() {
         impl_->interpreter->ModifyGraphWithDelegate(impl_->xnnpack) !=
             kTfLiteOk) {
         std::fprintf(stderr, "[detector] XNNPACK delegate unavailable, "
-                             "falling back to plain CPU\n");
+                     "falling back to plain CPU\n");
     }
+#endif
 
     if (impl_->interpreter->AllocateTensors() != kTfLiteOk) {
         std::fprintf(stderr, "[detector] AllocateTensors failed\n");
@@ -71,6 +79,15 @@ bool Detector::init() {
     if (in->dims->size == 4) {
         impl_->input_h = in->dims->data[1];
         impl_->input_w = in->dims->data[2];
+    }
+    std::fprintf(stderr, "[detector] initialized: input=%dx%d type=%d outputs=%zu\n",
+                 impl_->input_w, impl_->input_h, static_cast<int>(in->type),
+                 impl_->interpreter->outputs().size());
+    for (size_t i = 0; i < impl_->interpreter->outputs().size(); ++i) {
+        const TfLiteTensor* output = impl_->interpreter->output_tensor(i);
+        std::fprintf(stderr, "[detector] output[%zu] type=%d bytes=%zu\n", i,
+                     output ? static_cast<int>(output->type) : -1,
+                     output ? output->bytes : 0);
     }
     return true;
 }
@@ -123,6 +140,16 @@ std::vector<Detection> Detector::detect(const Frame& frame) {
     if (!boxes || !scores || !count) return out;
 
     const int n = static_cast<int>(count[0]);
+    static bool reported_output = false;
+    if (!reported_output) {
+        reported_output = true;
+        std::fprintf(stderr, "[detector] first output: count=%.1f score0=%.3f class0=%.1f\n",
+                     count[0], scores[0], classes ? classes[0] : -1.0f);
+        for (int i = 0; i < std::min(n, 10); ++i) {
+            std::fprintf(stderr, "[detector] candidate[%d] score=%.3f class=%.1f\n",
+                         i, scores[i], classes ? classes[i] : -1.0f);
+        }
+    }
     const int model_w = impl_->input_w;
     const int model_h = impl_->input_h;
 

@@ -8,9 +8,17 @@ namespace lifeguard {
 struct Config {
     // --- Video input ---------------------------------------------------
     std::string video_file;              // recorded footage to analyze (MP4)
+    std::string camera_device = "/dev/video0";  // host webcam/test source
+    std::string camera_backend = "file";  // file or uvc
     int frame_width = 1280;
     int frame_height = 720;
     int target_fps = 15;
+    bool display = true;
+    std::string output_video = "videos/lifeguard_annotated.mp4";
+    bool stream_enabled = false;
+    int stream_port = 8080;
+    int stream_width = 960;
+    int stream_jpeg_quality = 80;
 
     // --- Models --------------------------------------------------------
     std::string detector_model = "models/swimmer_detector_int8.tflite";
@@ -18,7 +26,7 @@ struct Config {
     int num_threads = 4;                 // TFLite / XNNPACK worker threads
     float detector_score_threshold = 0.5f;
     // Class index the detector treats as "person/swimmer". For the COCO
-    // SSD-MobileNet model this is 0; adjust if your model's labelmap differs.
+    // This project's COCO SSD-MobileNet export uses 0 for person.
     int person_class_id = 0;
 
     // --- Distress logic ------------------------------------------------
@@ -26,6 +34,8 @@ struct Config {
     float distress_persist_seconds = 4.0f;
     // Sliding window length used by the temporal analyzer (seconds).
     float temporal_window_seconds = 6.0f;
+    float distress_score_threshold = 0.6f;
+    float potential_distress_score_threshold = 0.2f;
 
     // --- Alerting ------------------------------------------------------
     bool alert_log = true;

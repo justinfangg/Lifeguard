@@ -34,7 +34,7 @@ struct Pose {
     float score(Keypoint k) const { return scores[static_cast<int>(k)]; }
 };
 
-// TFLite single-person pose estimator (MoveNet Lightning, int8).
+// TFLite single-person pose estimator (MoveNet Lightning).
 // Run once per tracked swimmer on the cropped bounding box.
 class PoseEstimator {
 public:

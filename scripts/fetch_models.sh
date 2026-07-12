@@ -5,7 +5,7 @@
 #
 # Produces (paths referenced by config/lifeguard.conf):
 #   models/swimmer_detector_int8.tflite   (person detector — downloaded here)
-#   models/movenet_lightning_int8.tflite  (pose — OPTIONAL, manual, see below)
+#   models/movenet_lightning_int8.tflite  (MoveNet Lightning pose)
 #
 # The detector is a generic COCO person detector (SSD-MobileNet v1, uint8),
 # whose output layout matches src/detector.cpp (boxes/classes/scores/count) and
@@ -39,20 +39,14 @@ else
     echo "detector -> $DET_DST"
 fi
 
-# --- MoveNet Lightning pose (int8) — OPTIONAL -------------------------
-# MoveNet now lives on Kaggle Models behind a login, so it cannot be fetched
-# with a plain curl. It is OPTIONAL: without it the app still runs (detection +
-# motion features). To add pose:
-#   1. Sign in and download "singlepose-lightning-tflite-int8" from
-#      https://www.kaggle.com/models/google/movenet
-#   2. Save the .tflite as:
+# --- MoveNet Lightning pose --------------------------------------------
 POSE_DST="$MODEL_DIR/movenet_lightning_int8.tflite"
 if [ -f "$POSE_DST" ]; then
     echo "pose model present: $POSE_DST"
 else
-    echo "pose model NOT present (optional): $POSE_DST"
-    echo "  -> download MoveNet singlepose-lightning int8 from Kaggle and save there."
+    echo "Downloading MoveNet Lightning pose model..."
+    fetch 'https://tfhub.dev/google/lite-model/movenet/singlepose/lightning/3?lite-format=tflite' "$POSE_DST"
+    echo "pose -> $POSE_DST"
 fi
 
 echo "Done."
-

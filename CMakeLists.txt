@@ -30,9 +30,12 @@ endif()
 
 # --- Build options ---------------------------------------------------------
 option(BUILD_AI_LIFEGUARD "Build the TensorFlow Lite inference application" ON)
+option(TENSORFLOW_OFFLINE "Use only a complete matching local dependency cache" OFF)
+option(LIFEGUARD_USE_XNNPACK "Use XNNPACK acceleration when versions match" OFF)
 
 # --- OpenCV ----------------------------------------------------------------
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
+find_package(OpenCV REQUIRED COMPONENTS highgui)
 
 # --- Main inference application --------------------------------------------
 if(BUILD_AI_LIFEGUARD)
@@ -56,6 +59,48 @@ if(BUILD_AI_LIFEGUARD)
       # FP16 invokes CMake again to fetch PSimd. Pass the setting through to
       # that child process as well.
       set(ENV{CMAKE_POLICY_VERSION_MINIMUM} 3.5)
+    endif()
+
+    # TensorFlow's Lite CMake files otherwise fetch Abseil, protobuf, XNNPACK,
+    # and several smaller libraries from GitHub.  The full TensorFlow checkout
+    # already vendors compatible copies of these dependencies, so point
+    # FetchContent at them when offline/local builds are requested.
+    # Tell Lite where the TensorFlow project itself lives.  This avoids a
+    # second, redundant TensorFlow clone; dependency fetching is controlled
+    # separately below.
+    set(TENSORFLOW_SOURCE_DIR "${TFLITE_SOURCE_DIR}" CACHE PATH
+      "Directory containing the TensorFlow project" FORCE)
+
+    if(TENSORFLOW_OFFLINE)
+      set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL
+        "Do not access the network for TensorFlow dependencies" FORCE)
+
+      # Prefer the TensorFlow checkout, with the existing build cache as a
+      # fallback for dependencies whose source is generated/populated there.
+      macro(lifeguard_dep name checkout fallback)
+        if(EXISTS "${checkout}/CMakeLists.txt")
+          set(FETCHCONTENT_SOURCE_DIR_${name} "${checkout}" CACHE PATH "" FORCE)
+        elseif(EXISTS "${fallback}")
+          set(FETCHCONTENT_SOURCE_DIR_${name} "${fallback}" CACHE PATH "" FORCE)
+        endif()
+      endmacro()
+      lifeguard_dep(ABSEIL-CPP "${TFLITE_SOURCE_DIR}/third_party/absl" "${CMAKE_BINARY_DIR}/abseil-cpp")
+      lifeguard_dep(PROTOBUF "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/protobuf" "${CMAKE_BINARY_DIR}/tflite-clean/protobuf")
+      lifeguard_dep(EIGEN "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/eigen3" "${CMAKE_BINARY_DIR}/eigen")
+      lifeguard_dep(FARMHASH "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/farmhash" "${CMAKE_BINARY_DIR}/farmhash")
+      lifeguard_dep(FFT2D "${TFLITE_SOURCE_DIR}/third_party/fft2d" "${CMAKE_BINARY_DIR}/fft2d")
+      lifeguard_dep(FLATBUFFERS "${TFLITE_SOURCE_DIR}/third_party/flatbuffers" "${CMAKE_BINARY_DIR}/flatbuffers")
+      lifeguard_dep(GEMMLOWP "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/gemmlowp" "${CMAKE_BINARY_DIR}/gemmlowp")
+      lifeguard_dep(CPUINFO "${TFLITE_SOURCE_DIR}/third_party/cpuinfo" "${CMAKE_BINARY_DIR}/cpuinfo")
+      lifeguard_dep(RUY "${TFLITE_SOURCE_DIR}/third_party/ruy" "${CMAKE_BINARY_DIR}/ruy")
+      lifeguard_dep(XNNPACK "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/xnnpack" "${CMAKE_BINARY_DIR}/xnnpack")
+      lifeguard_dep(PTHREADPOOL "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/pthreadpool" "${CMAKE_BINARY_DIR}/pthreadpool-source")
+      lifeguard_dep(FP16 "${TFLITE_SOURCE_DIR}/third_party/xla/third_party/FP16" "${CMAKE_BINARY_DIR}/FP16-source")
+      lifeguard_dep(ML_DTYPES "${TFLITE_SOURCE_DIR}/third_party/py/ml_dtypes" "${CMAKE_BINARY_DIR}/ml_dtypes")
+    endif()
+    if(NOT LIFEGUARD_USE_XNNPACK)
+      set(TFLITE_ENABLE_XNNPACK OFF CACHE BOOL
+        "Disable TensorFlow Lite XNNPACK backend" FORCE)
     endif()
     add_subdirectory(
       "${TFLITE_SOURCE_DIR}/tensorflow/lite"
@@ -91,7 +136,8 @@ if(BUILD_AI_LIFEGUARD)
   add_executable(ai_lifeguard
     src/main.cpp
     src/config.cpp
-    src/video_source.cpp
+    src/camera_source.cpp
+    src/mjpeg_server.cpp
     src/preprocess.cpp
     src/detector.cpp
     src/pose_estimator.cpp
@@ -108,6 +154,13 @@ if(BUILD_AI_LIFEGUARD)
   endif()
 
   target_link_libraries(ai_lifeguard PRIVATE ${OpenCV_LIBS} ${TFLITE_TARGET})
+
+  if(LIFEGUARD_USE_XNNPACK)
+    target_compile_definitions(ai_lifeguard PRIVATE LIFEGUARD_USE_XNNPACK=1)
+    if(TARGET xnnpack-delegate)
+      target_link_libraries(ai_lifeguard PRIVATE xnnpack-delegate XNNPACK)
+    endif()
+  endif()
 
   target_compile_options(ai_lifeguard PRIVATE -Wall -Wextra -O2)
   install(TARGETS ai_lifeguard RUNTIME DESTINATION bin)

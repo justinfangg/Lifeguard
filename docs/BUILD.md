@@ -1,8 +1,7 @@
 # Building AI Lifeguard
 
-AI Lifeguard is a software-only application: it analyzes recorded video files
-(e.g. MP4) on your development machine. There is no camera hardware or target
-board involved.
+AI Lifeguard runs natively on a machine with OpenCV, TensorFlow Lite, and a
+camera device OpenCV can open.
 
 ---
 
@@ -63,7 +62,10 @@ Use this loop to validate the detector output layout
 ([src/detector.cpp](../src/detector.cpp)) and to calibrate the distress
 thresholds ([src/distress_analyzer.cpp](../src/distress_analyzer.cpp)).
 
----
+For the simplest live-video setup, use the host webcam mode in
+[config/lifeguard.conf](../config/lifeguard.conf) and set `camera_backend = uvc`
+with `camera_device = 0`. On Raspberry Pi OS or Linux, that can be the Pi's
+camera if it enumerates as a V4L2/OpenCV device.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the distress-detection
 rationale.
